@@ -439,7 +439,7 @@ class ImprovedFursuitIdentifier:
             if idx == -1:  # FAISS returns -1 for empty slots
                 continue
                 
-            c.execute("SELECT * FROM fursuits WHERE embedding_id = ?", (int(idx),))
+            c.execute("SELECT id, post_id, character_name, image_url FROM fursuits WHERE embedding_id = ?", (int(idx),))
             row = c.fetchone()
             
             if row:

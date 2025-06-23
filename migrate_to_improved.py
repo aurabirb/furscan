@@ -14,6 +14,45 @@ old_src_path = "/Users/golis001/Desktop/rutorch"
 old_db_path = f"{old_src_path}/furtrack.db"
 furtrack_images = f"{old_src_path}/furtrack_images"
 
+def get_confidence_stats():
+    """Test all files and see how many % of the same character are identified if they are in the database more than once"""
+    identifier = ImprovedFursuitIdentifier()
+    conn = sqlite3.connect(identifier.db_path)
+    c = conn.cursor()
+    
+    c.execute("SELECT post_id, character_name FROM fursuits")
+    rows = c.fetchall()
+    
+    char_stats = {}
+    for post_id, char_name in rows:
+        if char_name not in char_stats:
+            char_stats[char_name] = []
+        char_stats[char_name].append(post_id)
+    
+    total_files = 0
+    correct_identifications = 0
+    
+    for char_name, post_ids in sample([*char_stats.items()], 300):
+        print(f"Processing character: {char_name} with {len(post_ids)} images")
+        if len(post_ids) > 1:  # Only consider characters with multiple images
+            total_files += len(post_ids)
+            for post_id in post_ids:
+                try:
+                    image_path = os.path.join(furtrack_images, post_id)
+                    if os.path.exists(image_path):
+                        test_image = Image.open(image_path)
+                        results = identifier.identify_character(test_image, top_k=3)
+                        if any(result['character_name'] == char_name for result in results if result['post_id'] != post_id):
+                            correct_identifications += 1
+                except Exception as e:
+                    print(f"Error processing {post_id}: {e}")
+    
+    if total_files > 0:
+        confidence = correct_identifications / total_files
+        print(f"Confidence of identifying characters with multiple images: {confidence:.2%}")
+    else:
+        print("No characters with multiple images found.")
+
 def test_migration():
     """Test the migrated system with a sample image"""
     identifier = ImprovedFursuitIdentifier()
@@ -83,6 +122,8 @@ if __name__ == "__main__":
             pass
         elif command == "test":
             test_migration()
+        elif command == "confidence":
+            get_confidence_stats()
         elif command == "compare":
             compare_systems()
         else:
