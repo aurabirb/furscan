@@ -159,7 +159,6 @@ def migrate_existing_data():
                 batch_size=16
             )
             migrated_count += added
-            print(f"Successfully migrated {added} images for {char_name}")
     
     print(f"Migration completed! Migrated {migrated_count} total images")
     
@@ -359,7 +358,7 @@ class ImprovedFursuitIdentifier:
                 print(f"Added {len(batch_embeddings)} images for {character_name}, last ID: {self.index.ntotal - 1}")
         
         self.save_index()
-        return self.index.ntotal - 1
+        return added_count
 
     
     def _add_to_database(self, metadata_list: List[Dict], start_embedding_id: int):
