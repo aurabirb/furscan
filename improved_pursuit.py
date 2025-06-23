@@ -1,4 +1,9 @@
 import os
+
+# This is critical to prevent faiss from crashing on MPS
+import open_clip.convert
+import open_clip.utils
+
 os.environ['FAISS_OPT_LEVEL'] = '' # prevent it from crashing
 import sys
 import numpy as np
@@ -10,7 +15,8 @@ from typing import cast, List, Dict, Tuple, Optional
 from PIL import Image
 import requests
 from io import BytesIO
-from transformers import CLIPProcessor, CLIPModel
+# from transformers import CLIPProcessor, CLIPModel
+import open_clip
 
 nfc25_db = "/Users/golis001/Desktop/nfc25-fursuits"
 db_path = f"/Users/golis001/Desktop/furtrack_improved.db"
@@ -146,16 +152,13 @@ def migrate_existing_data():
                 image_paths.append(record['url'])
         
         if image_paths:
-            try:
-                added = new_identifier.add_character_images(
-                    character_name=char_name,
-                    image_paths=image_paths,
-                    batch_size=16
-                )
-                migrated_count += added
-                print(f"Successfully migrated {added} images for {char_name}")
-            except Exception as e:
-                print(f"Error migrating {char_name}: {e}")
+            added = new_identifier.add_character_images(
+                character_name=char_name,
+                image_paths=image_paths,
+                batch_size=16
+            )
+            migrated_count += added
+            print(f"Successfully migrated {added} images for {char_name}")
     
     print(f"Migration completed! Migrated {migrated_count} total images")
     
@@ -169,7 +172,8 @@ def migrate_existing_data():
 
 class ImprovedFursuitIdentifier:
     def __init__(self, 
-                 model_name: str = "openai/clip-vit-base-patch32",
+                #  model_name: str = "openai/clip-vit-base-patch32",
+                 model_name: str = "ViT-B-32",
                  db_path: str = db_path,
                  index_path: str = index_path,
                  embedding_dim: int = 512):
@@ -183,14 +187,35 @@ class ImprovedFursuitIdentifier:
 
         print("Using device: " + DEVICE_NAME)
         self.device = torch.device(DEVICE_NAME)
-        print(f"Loading model {model_name}...")
-        self.model = cast(CLIPModel, CLIPModel.from_pretrained(model_name, low_cpu_mem_usage=True).to(self.device))
-        print(f"Model loaded: {model_name} with embedding dimension {self.embedding_dim}")
-        print("Loading processor...")
-        # requires accelerate: https://huggingface.co/docs/transformers/main/en/big_models
-        self.processor = cast(CLIPProcessor, CLIPProcessor.from_pretrained(model_name, device_map="auto", low_cpu_mem_usage=True))
-        self.model.eval()
+        # print(f"Loading model {model_name}...")
+        # self.model = cast(CLIPModel, CLIPModel.from_pretrained(model_name, low_cpu_mem_usage=True).to(self.device))
+        # print(f"Model loaded: {model_name} with embedding dimension {self.embedding_dim}")
+        # print("Loading processor...")
+        # # requires accelerate: https://huggingface.co/docs/transformers/main/en/big_models
+        # self.processor = cast(CLIPProcessor, CLIPProcessor.from_pretrained(model_name, device_map="auto", low_cpu_mem_usage=True))
+        # self.model.eval()
+        # print("Model evaluated.")
+
+
+        # model, preprocess = open_clip.create_model_from_pretrained('hf-hub:laion/CLIP-ViT-g-14-laion2B-s12B-b42K')
+        # tokenizer = open_clip.get_tokenizer('hf-hub:laion/CLIP-ViT-g-14-laion2B-s12B-b42K')
+        
+        # pretrained also accepts local paths
+        # ViT-H/14-quickgelu
+        print(f"Loading model {self.model_name}...")
+        model, _, preprocess = open_clip.create_model_and_transforms(self.model_name, pretrained='laion2b_s34b_b79k', precision='fp32', device=self.device)
+        self.model = cast(open_clip.CLIP, model)
+        print(f"Loaded model with embedding dimension: {self.model.visual.output_dim}")
+        print(f"expected embedding dimension: {self.embedding_dim}")
+        self.processor = preprocess
+        self.model.eval()  # model in train mode by default, impacts some models with BatchNorm or stochastic depth active
         print("Model evaluated.")
+        
+        # Initialize tokenizer
+        print("Loading tokenizer...")
+        self.tokenizer = open_clip.get_tokenizer(self.model_name)
+        # self.tokenizer = cast(CLIPTokenizer, CLIPTokenizer.from_pretrained(model_name, device_map="auto", low_cpu_mem_usage=True))
+        
 
         # Initialize database and index
         print(f"Initializing database at {self.db_path}")
@@ -265,8 +290,9 @@ class ImprovedFursuitIdentifier:
     def generate_embedding_from_image(self, image: Image.Image) -> np.ndarray:
         """Extract CLIP features from image"""
         with torch.no_grad():
-            inputs = self.processor(images=image, return_tensors="pt").to(self.device)
-            image_features = self.model.get_image_features(**inputs)
+            # inputs = self.processor(images=image, return_tensors="pt").to(self.device)
+            # image_features = self.model.get_image_features(**inputs)
+            image_features = self.model.encode_image(self.processor(image).unsqueeze(0).to(self.device))
             # Normalize features for better similarity search
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             return image_features.cpu().numpy().flatten()
