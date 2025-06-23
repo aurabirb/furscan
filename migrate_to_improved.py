@@ -33,6 +33,11 @@ def test_migration():
                 for i, result in enumerate(results, 1):
                     print(f"  {i}. {result['character_name']} "
                           f"(confidence: {result['confidence']:.3f})")
+                post = identifier.get_post_by_id(test_file)
+                ground_truth = post.get('character_name') if post else None
+                # TODO: this is only for one character, need to handle multiple
+                if ground_truth:
+                    print(f"Ground truth character: {ground_truth}")
             except Exception as e:
                 print(f"Error testing {test_file}: {e}")
 
@@ -74,7 +79,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         command = sys.argv[1]
         if command == "migrate":
-            migrate_existing_data()
+            # migrate_existing_data()
+            pass
         elif command == "test":
             test_migration()
         elif command == "compare":

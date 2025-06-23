@@ -282,6 +282,25 @@ class ImprovedFursuitIdentifier:
         conn.commit()
         conn.close()
     
+    def get_post_by_id(self, post_id: str) -> Optional[Dict]:
+        """Get post metadata by post ID"""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("SELECT id, post_id, character_name, embedding_id FROM fursuits WHERE post_id = ?", (post_id,))
+        row = c.fetchone()
+        conn.close()
+        
+        if row:
+            return {
+                'id': row[0],
+                'post_id': row[1],
+                'character_name': row[2],
+                'embedding_id': row[3],
+            }
+        else:
+            print(f"Post ID {post_id} not found in database.")
+        return None
+
     def load_or_create_index(self) -> faiss.Index:
         """Load existing FAISS index or create new one"""
         if os.path.exists(self.index_path):
@@ -475,7 +494,6 @@ class ImprovedFursuitIdentifier:
 # Example usage and testing
 def main():
     if sys.argv[1] == "--migrate":
-        delete_databases()
         migrate_existing_data()
     sys.exit(0)
     if sys.argv[1] == "--add":
