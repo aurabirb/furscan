@@ -1,61 +1,134 @@
-# import logging
-from dotenv import load_dotenv
+"""Telegram bot for fursuit character identification using SAM3 system."""
 
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
-from telegram.ext import filters, MessageHandler
-
-import sys
 import os
-from pursuit import detect_characters
+import sys
 from tempfile import NamedTemporaryFile
 
-# logging.basicConfig(
-#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-#     level=logging.INFO
-# )
+from dotenv import load_dotenv
+from PIL import Image
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+from sam3_pursuit import SAM3FursuitIdentifier
+
+# Global identifier instance (lazy loaded)
+_identifier = None
+
+
+def get_identifier() -> SAM3FursuitIdentifier:
+    """Get or create the identifier instance."""
+    global _identifier
+    if _identifier is None:
+        _identifier = SAM3FursuitIdentifier()
+    return _identifier
 
 
 async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photo messages - identify the character in the photo."""
     if not update.message:
-        print("Invalid attachment type", file=sys.stderr)
+        print("Invalid message", file=sys.stderr)
         return
+
     attachment = update.message.effective_attachment
-    new_file = await attachment[-1].get_file()  # get largest file
-    # update.message.text
-    try:
-        with NamedTemporaryFile(delete=True) as f:
-            bs = await new_file.download_as_bytearray()
-            f.write(bs)
-            rows = detect_characters(f.name, 5)
-    except Exception as e:
-        print(e, file=sys.stderr)
+    if not attachment:
         await context.bot.send_message(
-            chat_id=update.effective_chat.id, text=f"Error processing image: {e}"
+            chat_id=update.effective_chat.id,
+            text="Please send a photo."
         )
         return
-    characters = [r["char"] for r in rows]
-    msg = f"Closest characters: {characters}"
-    print(msg)
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+
+    # Get the largest photo
+    new_file = await attachment[-1].get_file()
+
+    try:
+        # Download and process the image
+        with NamedTemporaryFile(delete=True, suffix=".jpg") as f:
+            bs = await new_file.download_as_bytearray()
+            f.write(bs)
+            f.flush()
+
+            # Load image and identify
+            image = Image.open(f.name)
+            identifier = get_identifier()
+            results = identifier.identify(image, top_k=5)
+
+        if not results:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="No matching characters found."
+            )
+            return
+
+        # Format response
+        lines = ["Closest characters:"]
+        for i, result in enumerate(results, 1):
+            name = result.character_name or "Unknown"
+            confidence = result.confidence * 100
+            lines.append(f"{i}. {name} ({confidence:.1f}%)")
+
+        msg = "\n".join(lines)
+        print(msg)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+
+    except Exception as e:
+        print(f"Error processing image: {e}", file=sys.stderr)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Error processing image: {e}"
+        )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command."""
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text="I'm a bot that identifies fursuiters in pictures, please send a photo to me!",
+        text="I'm a bot that identifies fursuiters in pictures. "
+             "Send me a photo and I'll try to identify the character!"
     )
+
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /stats command."""
+    try:
+        identifier = get_identifier()
+        stats = identifier.get_stats()
+
+        msg = (
+            f"Database Statistics:\n"
+            f"- Total detections: {stats['total_detections']}\n"
+            f"- Unique characters: {stats['unique_characters']}\n"
+            f"- Unique posts: {stats['unique_posts']}\n"
+            f"- Index size: {stats['index_size']}"
+        )
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
+
+    except Exception as e:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Error getting stats: {e}"
+        )
 
 
 if __name__ == "__main__":
     load_dotenv()
     token = os.environ.get("TG_BOT_TOKEN", "")
+
+    if not token:
+        print("Error: TG_BOT_TOKEN not set in environment", file=sys.stderr)
+        sys.exit(1)
+
     application = ApplicationBuilder().token(token).build()
 
-    photo_handler = MessageHandler((~filters.COMMAND) & filters.PHOTO, photo)
-    application.add_handler(photo_handler)
+    # Add handlers
+    application.add_handler(MessageHandler((~filters.COMMAND) & filters.PHOTO, photo))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stats", stats))
 
-    start_handler = CommandHandler("start", start)
-    application.add_handler(start_handler)
-    print("Running...")
+    print("Bot running...")
     application.run_polling()

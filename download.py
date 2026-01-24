@@ -341,14 +341,20 @@ def download_all_characters(image_folder: str, batch_size: int, indexing: bool =
 
 
 def ingest_posts(post_ids: list[int], image_folder: str, embed_folder: str):
-    from pursuit import index_post, load_embedding_db
+    """Download and index posts using the SAM3 system."""
+    from sam3_pursuit import SAM3FursuitIdentifier
 
     metas = get_furtrack_posts(post_ids)
     store_furtrack_data(metas)
     metas = [m for m in metas if m["url"] and m["char"]]
     download_images([(m["url"], m["post_id"]) for m in metas], image_folder)
-    index = load_embedding_db()
-    index_post(index, metas, image_folder, embed_folder, save_every=1, total=1)
+
+    # Index using new SAM3 system
+    identifier = SAM3FursuitIdentifier()
+    for meta in metas:
+        img_path = f"{image_folder}/{meta['post_id']}.jpg"
+        if os.path.exists(img_path):
+            identifier.add_images(meta["char"], [img_path])
 
 
 if __name__ == "__main__":
