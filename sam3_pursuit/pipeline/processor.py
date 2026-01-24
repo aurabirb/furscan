@@ -23,19 +23,22 @@ class ProcessingPipeline:
 
     Combines SAM3 segmentation with DINOv2 embedding generation
     to process images for indexing or identification.
+
+    When SAM3 is available, uses text prompts ("fursuit") for targeted detection.
+    Falls back to generic segmentation with SAM2.
     """
 
     def __init__(
         self,
         device: Optional[str] = None,
-        sam_model: str = Config.SAM3_MODEL,
+        sam_model: Optional[str] = None,
         dinov2_model: str = Config.DINOV2_MODEL
     ):
         """Initialize the processing pipeline.
 
         Args:
             device: Device for inference. Auto-detected if None.
-            sam_model: SAM3 model variant.
+            sam_model: SAM model name. If None, auto-selects SAM3 or SAM2.
             dinov2_model: DINOv2 model name.
         """
         self.device = device or Config.get_device()
@@ -43,22 +46,31 @@ class ProcessingPipeline:
         print("Initializing processing pipeline...")
         self.segmentor = FursuitSegmentor(device=self.device, model_name=sam_model)
         self.embedder = FursuitEmbedder(device=self.device, model_name=dinov2_model)
-        print("Pipeline initialized")
 
-    def process(self, image: Image.Image) -> list[ProcessingResult]:
+        if self.segmentor.supports_text_prompts:
+            print("Pipeline initialized with SAM3 - text prompts enabled!")
+        else:
+            print("Pipeline initialized with SAM2 - using generic segmentation")
+
+    def process(
+        self,
+        image: Image.Image,
+        concept: str = "fursuit"
+    ) -> list[ProcessingResult]:
         """Process an image through the full pipeline.
 
-        Segments the image to detect fursuits, then generates
-        embeddings for each detected region.
+        Uses SAM3 text prompts when available for targeted fursuit detection.
+        Falls back to generic segmentation with SAM2.
 
         Args:
             image: PIL Image to process.
+            concept: Text concept for SAM3 (default: "fursuit").
 
         Returns:
             List of ProcessingResult objects, one per detected fursuit.
         """
-        # Segment image
-        segmentations = self.segmentor.segment(image)
+        # Use fursuit-specific segmentation (SAM3 text prompt or SAM2 fallback)
+        segmentations = self.segmentor.segment_by_concept(image, concept=concept)
 
         results = []
         for seg in segmentations:
@@ -72,10 +84,23 @@ class ProcessingPipeline:
 
         return results
 
+    def process_fursuits(self, image: Image.Image) -> list[ProcessingResult]:
+        """Process image specifically looking for fursuits.
+
+        Convenience method that uses "fursuit" as the concept.
+
+        Args:
+            image: PIL Image to process.
+
+        Returns:
+            List of ProcessingResult objects, one per detected fursuit.
+        """
+        return self.process(image, concept="fursuit")
+
     def process_full_image(self, image: Image.Image) -> ProcessingResult:
         """Process full image without segmentation.
 
-        Useful for images known to contain a single fursuit.
+        Useful for images known to contain a single fursuit (e.g., badge photos).
 
         Args:
             image: PIL Image to process.
@@ -122,3 +147,8 @@ class ProcessingPipeline:
             Array of embeddings, shape (n, embedding_dim).
         """
         return self.embedder.embed_batch(images)
+
+    @property
+    def supports_text_prompts(self) -> bool:
+        """Check if the pipeline supports SAM3 text prompts."""
+        return self.segmentor.supports_text_prompts

@@ -11,6 +11,25 @@ Pursuit is a fursuit character recognition system that identifies fursuit charac
 - Uses DINOv2 for 768-dimensional embedding generation (better for fine-grained similarity than CLIP)
 - FAISS HNSW index for fast approximate nearest neighbor search
 
+## SAM3 Text Prompts (Key Feature)
+
+SAM3 (released November 2025) enables **open-vocabulary concept segmentation** using text prompts. This is the killer feature for fursuit recognition:
+
+```python
+# Instead of generic segmentation, we can specifically find fursuits:
+segmentor.segment_by_concept(image, concept="fursuit")
+segmentor.segment_by_concept(image, concept="fursuit head")
+```
+
+**Why this matters:**
+- SAM1/SAM2: Required manual visual prompts (points, boxes)
+- SAM3: Can use text like "fursuit" to find ALL matching instances automatically
+
+**Setup required:**
+1. Request access at https://huggingface.co/facebook/sam3
+2. Run `huggingface-cli login`
+3. System auto-detects SAM3 availability and falls back to SAM2 if needed
+
 ## Running the Project
 
 ```bash
@@ -41,7 +60,7 @@ download.py                      FurTrack API scraper, SQLite storage, image dow
         ↓
 sam3_pursuit/
 ├── models/
-│   ├── segmentor.py             SAM3 wrapper for fursuit detection
+│   ├── segmentor.py             SAM3 wrapper for fursuit detection (text prompts!)
 │   └── embedder.py              DINOv2 embedding generator (768D)
 ├── storage/
 │   ├── database.py              SQLite operations for detections
@@ -71,6 +90,7 @@ tgbot.py                         Telegram bot interface
 
 **FursuitSegmentor** (`sam3_pursuit/models/segmentor.py`):
 - `segment(image)` - Detect and segment fursuit instances
+- `segment_by_concept(image, concept)` - SAM3 text-prompted segmentation
 
 **FursuitEmbedder** (`sam3_pursuit/models/embedder.py`):
 - `embed(image)` - Generate L2-normalized DINOv2 embedding
@@ -84,6 +104,7 @@ tgbot.py                         Telegram bot interface
 ## Environment Variables
 
 - `TG_BOT_TOKEN` - Telegram bot token (required for tgbot.py)
+- `HF_TOKEN` - HuggingFace token (optional, for SAM3 access)
 
 ## Device Selection
 
@@ -111,6 +132,13 @@ CREATE TABLE detections (
 
 ## Model Choices
 
-- **SAM3**: Best-in-class open-vocabulary segmentation for detecting fursuits in images
+- **SAM3**: Open-vocabulary segmentation with text prompts ("fursuit") - the key differentiator
 - **DINOv2**: Self-supervised visual embeddings, superior to CLIP for fine-grained same-object matching
 - **FAISS HNSW**: Fast approximate search with configurable accuracy/speed tradeoff
+
+## References
+
+- [SAM3 Paper](https://arxiv.org/abs/2511.16719)
+- [SAM3 GitHub](https://github.com/facebookresearch/sam3)
+- [SAM3 Ultralytics Docs](https://docs.ultralytics.com/models/sam-3/)
+- [DINOv2](https://github.com/facebookresearch/dinov2)
