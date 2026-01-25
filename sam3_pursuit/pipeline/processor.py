@@ -16,6 +16,7 @@ class ProcessingResult:
     """Result of processing an image through the pipeline."""
     segmentation: SegmentationResult
     embedding: np.ndarray
+    segmentor_model: str = "unknown"  # Track which segmentor was used
 
 
 class ProcessingPipeline:
@@ -24,8 +25,7 @@ class ProcessingPipeline:
     Combines SAM3 segmentation with DINOv2 embedding generation
     to process images for indexing or identification.
 
-    When SAM3 is available, uses text prompts ("fursuit") for targeted detection.
-    Falls back to generic segmentation with SAM2.
+    Uses SAM3 text prompts ("fursuiter") for targeted fursuit detection.
     """
 
     def __init__(
@@ -38,7 +38,7 @@ class ProcessingPipeline:
 
         Args:
             device: Device for inference. Auto-detected if None.
-            sam_model: SAM model name. If None, auto-selects SAM3 or SAM2.
+            sam_model: SAM3 model name. Defaults to "sam3".
             dinov2_model: DINOv2 model name.
         """
         self.device = device or Config.get_device()
@@ -46,25 +46,20 @@ class ProcessingPipeline:
         print("Initializing processing pipeline...")
         self.segmentor = FursuitSegmentor(device=self.device, model_name=sam_model)
         self.embedder = FursuitEmbedder(device=self.device, model_name=dinov2_model)
-
-        if self.segmentor.supports_text_prompts:
-            print("Pipeline initialized with SAM3 - text prompts enabled!")
-        else:
-            print("Pipeline initialized with SAM2 - using generic segmentation")
+        print("Pipeline initialized with SAM3 - text prompts enabled!")
 
     def process(
         self,
         image: Image.Image,
-        concept: str = "fursuit"
+        concept: str = "fursuiter"
     ) -> list[ProcessingResult]:
         """Process an image through the full pipeline.
 
-        Uses SAM3 text prompts when available for targeted fursuit detection.
-        Falls back to generic segmentation with SAM2.
+        Uses SAM3 text prompts for targeted fursuit detection.
 
         Args:
             image: PIL Image to process.
-            concept: Text concept for SAM3 (default: "fursuit").
+            concept: Text concept for SAM3 (default: "fursuiter").
 
         Returns:
             List of ProcessingResult objects, one per detected fursuit.
@@ -79,7 +74,8 @@ class ProcessingPipeline:
 
             results.append(ProcessingResult(
                 segmentation=seg,
-                embedding=embedding
+                embedding=embedding,
+                segmentor_model=self.segmentor.model_name
             ))
 
         return results
@@ -87,7 +83,7 @@ class ProcessingPipeline:
     def process_fursuits(self, image: Image.Image) -> list[ProcessingResult]:
         """Process image specifically looking for fursuits.
 
-        Convenience method that uses "fursuit" as the concept.
+        Convenience method that uses "fursuiter" as the concept.
 
         Args:
             image: PIL Image to process.
@@ -95,7 +91,7 @@ class ProcessingPipeline:
         Returns:
             List of ProcessingResult objects, one per detected fursuit.
         """
-        return self.process(image, concept="fursuit")
+        return self.process(image, concept="fursuiter")
 
     def process_full_image(self, image: Image.Image) -> ProcessingResult:
         """Process full image without segmentation.
@@ -123,7 +119,8 @@ class ProcessingPipeline:
 
         return ProcessingResult(
             segmentation=segmentation,
-            embedding=embedding
+            embedding=embedding,
+            segmentor_model=self.segmentor.model_name
         )
 
     def embed_only(self, image: Image.Image) -> np.ndarray:
@@ -150,5 +147,10 @@ class ProcessingPipeline:
 
     @property
     def supports_text_prompts(self) -> bool:
-        """Check if the pipeline supports SAM3 text prompts."""
-        return self.segmentor.supports_text_prompts
+        """Check if the pipeline supports text prompts (always True for SAM3)."""
+        return True
+
+    @property
+    def segmentor_model_name(self) -> str:
+        """Get the name of the segmentor model being used."""
+        return self.segmentor.model_name

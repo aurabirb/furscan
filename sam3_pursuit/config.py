@@ -19,10 +19,7 @@ class Config:
     OLD_DB_PATH = os.path.join(BASE_DIR, "furtrack.db")
 
     # Model settings
-    # SAM3 is preferred but requires HuggingFace access
-    # Falls back to SAM2 automatically
-    SAM3_MODEL = "sam3"  # Preferred: SAM3 with text prompts
-    SAM2_FALLBACK_MODEL = "sam2.1_s"  # Fallback: SAM2.1 small variant
+    SAM3_MODEL = "sam3"  # SAM3 with text prompts
 
     # DINOv2 for embeddings
     DINOV2_MODEL = "facebook/dinov2-base"  # DINOv2 model name
@@ -33,7 +30,7 @@ class Config:
     MAX_DETECTIONS = 10  # Maximum detections per image
 
     # Default concept for fursuit detection (SAM3 text prompt)
-    DEFAULT_CONCEPT = "fursuit"
+    DEFAULT_CONCEPT = "fursuiter"
 
     # Search settings
     DEFAULT_TOP_K = 5

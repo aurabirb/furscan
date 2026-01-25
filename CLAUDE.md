@@ -1,144 +1,114 @@
-# CLAUDE.md
+# Pursuit - Fursuit Character Recognition
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Fursuit character recognition system using computer vision. Identifies fursuit characters from photos by matching against a database of known characters.
 
-## Project Overview
+## Current Status
 
-Pursuit is a fursuit character recognition system that identifies fursuit characters from photos. It downloads images from FurTrack.com, generates ML embeddings, and provides character identification via CLI and Telegram bot.
+**Working:** SAM3 + DINOv2 pipeline on CUDA
 
-**Current System: SAM3 + DINOv2** (`sam3_pursuit/`)
-- Uses Meta's Segment Anything Model 3 (SAM3) via ultralytics for fursuit detection/segmentation
-- Uses DINOv2 for 768-dimensional embedding generation (better for fine-grained similarity than CLIP)
-- FAISS HNSW index for fast approximate nearest neighbor search
+The system uses SAM3 text prompts with `"fursuiter"` for automatic detection of all fursuits in an image.
 
-## SAM3 Text Prompts (Key Feature)
-
-SAM3 (released November 2025) enables **open-vocabulary concept segmentation** using text prompts. This is the killer feature for fursuit recognition:
-
-```python
-# Instead of generic segmentation, we can specifically find fursuits:
-segmentor.segment_by_concept(image, concept="fursuit")
-segmentor.segment_by_concept(image, concept="fursuit head")
-```
-
-**Why this matters:**
-- SAM1/SAM2: Required manual visual prompts (points, boxes)
-- SAM3: Can use text like "fursuit" to find ALL matching instances automatically
-
-**Setup required:**
-1. Request access at https://huggingface.co/facebook/sam3
-2. Run `huggingface-cli login`
-3. System auto-detects SAM3 availability and falls back to SAM2 if needed
-
-## Running the Project
+## Quick Start
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Setup
+uv venv .venv && source .venv/bin/activate
+uv pip install -e .
 
-# Download images and metadata from FurTrack
-python download.py
+# CLI
+python -m sam3_pursuit.api.cli identify photo.jpg
+python -m sam3_pursuit.api.cli add -c "CharName" img1.jpg img2.jpg
+python -m sam3_pursuit.api.cli stats
 
-# CLI usage
-python -m sam3_pursuit.api.cli identify photo.jpg           # Identify character
-python -m sam3_pursuit.api.cli identify photo.jpg --segment # With segmentation
-python -m sam3_pursuit.api.cli add -c "CharName" img1.jpg   # Add character images
-python -m sam3_pursuit.api.cli index                        # Index unprocessed images
-python -m sam3_pursuit.api.cli stats                        # Show statistics
+# Index NFC25 database
+python scripts/index_nfc25.py
 
-# Telegram bot (requires TG_BOT_TOKEN in .env)
-python tgbot.py
+# Telegram bot
+TG_BOT_TOKEN=xxx python tgbot.py
 
-# Run tests
+# Tests
 python -m pytest tests/
+python tests/test_nfc25.py embedding
+python tests/test_nfc25.py search
 ```
 
 ## Architecture
 
 ```
-download.py                      FurTrack API scraper, SQLite storage, image downloader
-        ↓
+Image → SAM3 (segment by "fursuiter") → DINOv2 (embed) → FAISS (search) → Results
+```
+
+```
 sam3_pursuit/
 ├── models/
-│   ├── segmentor.py             SAM3 wrapper for fursuit detection (text prompts!)
-│   └── embedder.py              DINOv2 embedding generator (768D)
+│   ├── segmentor.py      SAM3 segmentation with text prompts
+│   └── embedder.py       DINOv2 768D embeddings
 ├── storage/
-│   ├── database.py              SQLite operations for detections
-│   └── vector_index.py          FAISS HNSW index
+│   ├── database.py       SQLite detection metadata
+│   └── vector_index.py   FAISS HNSW index
 ├── pipeline/
-│   └── processor.py             Combined segmentation + embedding pipeline
+│   └── processor.py      Segmentation + embedding pipeline
 └── api/
-    ├── identifier.py            Main public API (SAM3FursuitIdentifier)
-    └── cli.py                   Command-line interface
-        ↓
-tgbot.py                         Telegram bot interface
+    ├── identifier.py     Main API: SAM3FursuitIdentifier
+    └── cli.py            Command-line interface
+
+scripts/
+└── index_nfc25.py        Index NFC25 fursuit database
+
+download.py               FurTrack scraper
+tgbot.py                  Telegram bot
 ```
 
-**Storage:**
-- SQLite database: `furtrack_sam3.db` (detection metadata)
-- FAISS index: `faiss_sam3.index` (768D DINOv2 embeddings)
-- Images: `furtrack_images/` directory
-- Legacy database: `furtrack.db` (from download.py)
+## Key APIs
 
-## Key Classes and Functions
+```python
+from sam3_pursuit import SAM3FursuitIdentifier
 
-**SAM3FursuitIdentifier** (`sam3_pursuit/api/identifier.py`):
-- `identify(image, top_k, use_segmentation)` - Find matching characters
-- `add_images(character_name, image_paths)` - Add images for a character
-- `process_unindexed()` - Batch process images from download database
-- `get_stats()` - Get system statistics
+identifier = SAM3FursuitIdentifier()
 
-**FursuitSegmentor** (`sam3_pursuit/models/segmentor.py`):
-- `segment(image)` - Detect and segment fursuit instances
-- `segment_by_concept(image, concept)` - SAM3 text-prompted segmentation
+# Identify character in image
+results = identifier.identify(image, top_k=5)
 
-**FursuitEmbedder** (`sam3_pursuit/models/embedder.py`):
-- `embed(image)` - Generate L2-normalized DINOv2 embedding
-- `embed_batch(images)` - Batch embedding generation
+# Add images for a character
+identifier.add_images("CharacterName", ["img1.jpg", "img2.jpg"])
 
-**Download system** (`download.py`):
-- `download_all_characters()` - Main download loop
-- `get_furtrack_posts()` - Fetch metadata from FurTrack API
-- `store_furtrack_data()` / `recall_furtrack_data_by_id()` - SQLite operations
-
-## Environment Variables
-
-- `TG_BOT_TOKEN` - Telegram bot token (required for tgbot.py)
-- `HF_TOKEN` - HuggingFace token (optional, for SAM3 access)
-
-## Device Selection
-
-Code auto-selects: CUDA > MPS (Apple Silicon) > CPU. MacOS requires special env vars (set automatically in config.py):
-- `KMP_DUPLICATE_LIB_OK=True`
-- `FAISS_OPT_LEVEL=''`
-
-## Database Schema
-
-```sql
--- furtrack_sam3.db: Character detections
-CREATE TABLE detections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    post_id TEXT NOT NULL,
-    character_name TEXT,
-    embedding_id INTEGER UNIQUE NOT NULL,
-    bbox_x INTEGER,
-    bbox_y INTEGER,
-    bbox_width INTEGER,
-    bbox_height INTEGER,
-    confidence REAL DEFAULT 0.0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+# Segment by concept
+segmentor.segment_by_concept(image, concept="fursuiter")
 ```
 
-## Model Choices
+## Data Sources
 
-- **SAM3**: Open-vocabulary segmentation with text prompts ("fursuit") - the key differentiator
-- **DINOv2**: Self-supervised visual embeddings, superior to CLIP for fine-grained same-object matching
-- **FAISS HNSW**: Fast approximate search with configurable accuracy/speed tradeoff
+- **FurTrack**: `download.py` scrapes furtrack.com API
+- **NFC25**: 2,305 fursuit badge photos in `/media/user/SSD2TB/nfc25-fursuits/`
+
+## Storage
+
+| File | Contents |
+|------|----------|
+| `furtrack_sam3.db` | Detection metadata (SQLite) |
+| `faiss_sam3.index` | 768D embeddings (FAISS HNSW) |
+| `nfc25.db` / `nfc25.index` | NFC25 database |
+
+## Config
+
+Key settings in `sam3_pursuit/config.py`:
+
+```python
+SAM3_MODEL = "sam3"
+DINOV2_MODEL = "facebook/dinov2-base"
+EMBEDDING_DIM = 768
+DEFAULT_CONCEPT = "fursuiter"  # SAM3 text prompt
+```
+
+## Environment
+
+- `TG_BOT_TOKEN` - Telegram bot token
+- `HF_TOKEN` - HuggingFace token (for SAM3)
+
+Device auto-selection: CUDA > MPS > CPU
 
 ## References
 
-- [SAM3 Paper](https://arxiv.org/abs/2511.16719)
+- [SAM3 Paper](https://arxiv.org/abs/2511.16719) - Segment Anything with Concepts
 - [SAM3 GitHub](https://github.com/facebookresearch/sam3)
-- [SAM3 Ultralytics Docs](https://docs.ultralytics.com/models/sam-3/)
-- [DINOv2](https://github.com/facebookresearch/dinov2)
+- [DINOv2](https://github.com/facebookresearch/dinov2) - Self-supervised vision
