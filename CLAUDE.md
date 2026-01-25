@@ -8,28 +8,55 @@ Fursuit character recognition system using computer vision. Identifies fursuit c
 
 The system uses SAM3 text prompts with `"fursuiter"` for automatic detection of all fursuits in an image.
 
+## Installation
+
+### 1. Setup Python environment
+
+```bash
+uv venv .venv && source .venv/bin/activate
+uv pip install -e .
+```
+
+### 2. Login to HuggingFace (required for SAM3)
+
+```bash
+pip install huggingface_hub
+huggingface-cli login
+```
+
+### 3. Download SAM3 model (~3.5GB)
+
+```bash
+python -c "from huggingface_hub import hf_hub_download; hf_hub_download('facebook/sam3', 'sam3.pt', local_dir='.')"
+```
+
+Or manually download from https://huggingface.co/facebook/sam3 and place `sam3.pt` in the project root.
+
+### 4. Verify installation
+
+```bash
+python -c "from sam3_pursuit.models.segmentor import FursuitSegmentor; s = FursuitSegmentor(); print('SAM3 ready!')"
+```
+
 ## Quick Start
 
 ```bash
-# Setup
-uv venv .venv && source .venv/bin/activate
-uv pip install -e .
-
-# CLI
+# Identify character in photo
 python -m sam3_pursuit.api.cli identify photo.jpg
+
+# Add images for a character
 python -m sam3_pursuit.api.cli add -c "CharName" img1.jpg img2.jpg
+
+# View statistics
 python -m sam3_pursuit.api.cli stats
 
-# Index NFC25 database
-python scripts/index_nfc25.py
-
-# Telegram bot
+# Run Telegram bot
 TG_BOT_TOKEN=xxx python tgbot.py
 
-# Tests
+# Run tests
 python -m pytest tests/
-python tests/test_nfc25.py embedding
-python tests/test_nfc25.py search
+python scripts/test_segmentation.py segment
+python scripts/test_segmentation.py visualize
 ```
 
 ## Architecture
@@ -53,9 +80,8 @@ sam3_pursuit/
     └── cli.py            Command-line interface
 
 scripts/
-└── index_nfc25.py        Index NFC25 fursuit database
+└── test_segmentation.py  Debug and visualization
 
-download.py               FurTrack scraper
 tgbot.py                  Telegram bot
 ```
 
@@ -77,18 +103,12 @@ segmentor.segment(image)
 segmentor.segment(image, concept="person")  # custom concept
 ```
 
-## Data Sources
-
-- **FurTrack**: `download.py` scrapes furtrack.com API
-- **NFC25**: 2,305 fursuit badge photos in `/media/user/SSD2TB/nfc25-fursuits/`
-
 ## Storage
 
 | File | Contents |
 |------|----------|
-| `furtrack_sam3.db` | Detection metadata (SQLite) |
-| `faiss_sam3.index` | 768D embeddings (FAISS HNSW) |
-| `nfc25.db` / `nfc25.index` | NFC25 database |
+| `*.db` | Detection metadata (SQLite) |
+| `*.index` | 768D embeddings (FAISS HNSW) |
 
 ## Config
 
@@ -104,7 +124,7 @@ DEFAULT_CONCEPT = "fursuiter"  # SAM3 text prompt
 ## Environment
 
 - `TG_BOT_TOKEN` - Telegram bot token
-- `HF_TOKEN` - HuggingFace token (for SAM3)
+- `HF_TOKEN` - HuggingFace token (for SAM3 download)
 
 Device auto-selection: CUDA > MPS > CPU
 

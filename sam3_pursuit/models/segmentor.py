@@ -26,10 +26,10 @@ class SegmentationResult:
 class FursuitSegmentor:
     """SAM3-based fursuit detection and segmentation.
 
-    Uses Meta's Segment Anything Model 3 (via ultralytics) to detect
+    Uses Meta's Segment Anything Model 3 with SAM3SemanticPredictor to detect
     and segment fursuit characters in images using text prompts.
 
-    Key feature: segment_by_concept("fursuiter") finds all fursuits automatically.
+    Key feature: segment("fursuiter") finds all fursuits automatically.
     """
 
     # Default concept for fursuit detection
@@ -53,22 +53,32 @@ class FursuitSegmentor:
         self.device = device or Config.get_device()
         self.confidence_threshold = confidence_threshold
         self.max_detections = max_detections
+        self.model_name = model_name or Config.SAM3_MODEL
 
-        self.model, self.model_name = self._load_model(model_name)
+        self.predictor = self._load_model()
 
-    def _load_model(self, model_name: Optional[str]):
-        """Load SAM3 model.
+    def _load_model(self):
+        """Load SAM3 semantic predictor for text prompts.
 
         Returns:
-            Tuple of (model, model_name)
+            SAM3SemanticPredictor instance
         """
-        from ultralytics import SAM
+        from ultralytics.models.sam.predict import SAM3SemanticPredictor
 
-        model_name = model_name or Config.SAM3_MODEL
-        print(f"Loading SAM3 model: {model_name} on {self.device}")
-        model = SAM(f"{model_name}.pt")
+        model_path = f"{self.model_name}.pt"
+        print(f"Loading SAM3 model: {model_path} on {self.device}")
+
+        overrides = dict(
+            conf=self.confidence_threshold,
+            task="segment",
+            mode="predict",
+            model=model_path,
+            device=self.device,
+            verbose=False,
+        )
+        predictor = SAM3SemanticPredictor(overrides=overrides)
         print("SAM3 loaded successfully - text prompts enabled!")
-        return model, model_name
+        return predictor
 
     def segment(
         self,
@@ -86,12 +96,10 @@ class FursuitSegmentor:
         """
         image_np = np.array(image.convert("RGB"))
 
-        results = self.model(
-            image_np,
-            texts=[concept],
-            device=self.device,
-            verbose=False
-        )
+        # Set image and run text query
+        self.predictor.set_image(image_np)
+        results = self.predictor(text=[concept])
+
         return self._process_results(image, results)
 
     def _process_results(
@@ -165,9 +173,13 @@ class FursuitSegmentor:
         Returns:
             List of SegmentationResult objects.
         """
+        from ultralytics import SAM
+
         image_np = np.array(image.convert("RGB"))
 
-        results = self.model(
+        # Use standard SAM for point prompts
+        sam = SAM(f"{self.model_name}.pt")
+        results = sam(
             image_np,
             points=points,
             labels=labels,
@@ -191,9 +203,13 @@ class FursuitSegmentor:
         Returns:
             List of SegmentationResult objects.
         """
+        from ultralytics import SAM
+
         image_np = np.array(image.convert("RGB"))
 
-        results = self.model(
+        # Use standard SAM for box prompts
+        sam = SAM(f"{self.model_name}.pt")
+        results = sam(
             image_np,
             bboxes=boxes,
             device=self.device,
