@@ -1,10 +1,28 @@
-datasets
-furtrack_images
-*.pt
-*.bak
-embeddings
+# Python
+__pycache__/
 *.pyc
-.python-version
-.env
 *.egg-info/
 .venv/
+.python-version
+
+# Environment
+.env
+
+# Model weights
+*.pt
+
+# Database and index files
+*.db
+*.index
+
+# Downloaded data
+datasets/
+furtrack_images/
+embeddings/
+
+# Backups
+*.bak
+
+# IDE
+.vscode/
+.idea/

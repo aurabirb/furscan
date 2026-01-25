@@ -20,6 +20,7 @@ class Detection:
     bbox_width: int
     bbox_height: int
     confidence: float
+    segmentor_model: str = "unknown"  # Track which segmentor was used
     created_at: Optional[datetime] = None
 
 
@@ -51,6 +52,7 @@ class Database:
                 bbox_width INTEGER,
                 bbox_height INTEGER,
                 confidence REAL DEFAULT 0.0,
+                segmentor_model TEXT DEFAULT 'unknown',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -58,6 +60,17 @@ class Database:
         c.execute("CREATE INDEX IF NOT EXISTS idx_post_id ON detections(post_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_character_name ON detections(character_name)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_embedding_id ON detections(embedding_id)")
+
+        # Migration: add segmentor_model column if missing (for existing databases)
+        c.execute("PRAGMA table_info(detections)")
+        columns = [row[1] for row in c.fetchall()]
+        if "segmentor_model" not in columns:
+            c.execute("ALTER TABLE detections ADD COLUMN segmentor_model TEXT DEFAULT 'sam2.1_s'")
+            # Mark existing records as SAM2 (since that's what was used before)
+            c.execute("UPDATE detections SET segmentor_model = 'sam2.1_s' WHERE segmentor_model IS NULL OR segmentor_model = 'unknown'")
+
+        # Create index on segmentor_model (after migration ensures column exists)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_segmentor_model ON detections(segmentor_model)")
 
         conn.commit()
         conn.close()
@@ -76,8 +89,8 @@ class Database:
 
         c.execute("""
             INSERT INTO detections
-            (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height, confidence)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height, confidence, segmentor_model)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             detection.post_id,
             detection.character_name,
@@ -86,7 +99,8 @@ class Database:
             detection.bbox_y,
             detection.bbox_width,
             detection.bbox_height,
-            detection.confidence
+            detection.confidence,
+            detection.segmentor_model
         ))
 
         row_id = c.lastrowid
@@ -114,8 +128,8 @@ class Database:
         for detection in detections:
             c.execute("""
                 INSERT INTO detections
-                (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height, confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height, confidence, segmentor_model)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 detection.post_id,
                 detection.character_name,
@@ -124,7 +138,8 @@ class Database:
                 detection.bbox_y,
                 detection.bbox_width,
                 detection.bbox_height,
-                detection.confidence
+                detection.confidence,
+                detection.segmentor_model
             ))
             row_ids.append(c.lastrowid)
 
@@ -147,7 +162,7 @@ class Database:
 
         c.execute("""
             SELECT id, post_id, character_name, embedding_id, bbox_x, bbox_y,
-                   bbox_width, bbox_height, confidence, created_at
+                   bbox_width, bbox_height, confidence, segmentor_model, created_at
             FROM detections WHERE embedding_id = ?
         """, (embedding_id,))
 
@@ -165,7 +180,8 @@ class Database:
                 bbox_width=row[6],
                 bbox_height=row[7],
                 confidence=row[8],
-                created_at=row[9]
+                segmentor_model=row[9],
+                created_at=row[10]
             )
         return None
 
@@ -183,7 +199,7 @@ class Database:
 
         c.execute("""
             SELECT id, post_id, character_name, embedding_id, bbox_x, bbox_y,
-                   bbox_width, bbox_height, confidence, created_at
+                   bbox_width, bbox_height, confidence, segmentor_model, created_at
             FROM detections WHERE post_id = ?
         """, (post_id,))
 
@@ -201,7 +217,8 @@ class Database:
                 bbox_width=row[6],
                 bbox_height=row[7],
                 confidence=row[8],
-                created_at=row[9]
+                segmentor_model=row[9],
+                created_at=row[10]
             )
             for row in rows
         ]
@@ -220,7 +237,7 @@ class Database:
 
         c.execute("""
             SELECT id, post_id, character_name, embedding_id, bbox_x, bbox_y,
-                   bbox_width, bbox_height, confidence, created_at
+                   bbox_width, bbox_height, confidence, segmentor_model, created_at
             FROM detections WHERE character_name = ?
         """, (character_name,))
 
@@ -238,7 +255,8 @@ class Database:
                 bbox_width=row[6],
                 bbox_height=row[7],
                 confidence=row[8],
-                created_at=row[9]
+                segmentor_model=row[9],
+                created_at=row[10]
             )
             for row in rows
         ]
@@ -247,7 +265,7 @@ class Database:
         """Get database statistics.
 
         Returns:
-            Dictionary with total_detections, unique_characters, and unique_posts.
+            Dictionary with total_detections, unique_characters, unique_posts, and segmentor_breakdown.
         """
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
@@ -271,14 +289,45 @@ class Database:
         """)
         top_characters = c.fetchall()
 
+        # Segmentor model breakdown
+        c.execute("""
+            SELECT segmentor_model, COUNT(*) as count
+            FROM detections
+            GROUP BY segmentor_model
+            ORDER BY count DESC
+        """)
+        segmentor_breakdown = dict(c.fetchall())
+
         conn.close()
 
         return {
             "total_detections": total_detections,
             "unique_characters": unique_characters,
             "unique_posts": unique_posts,
-            "top_characters": top_characters
+            "top_characters": top_characters,
+            "segmentor_breakdown": segmentor_breakdown
         }
+
+    def get_embedding_ids_by_segmentor(self, segmentor_model: str) -> list[int]:
+        """Get all embedding IDs for a specific segmentor model.
+
+        Args:
+            segmentor_model: The segmentor model name (e.g., 'sam2.1_s', 'sam3').
+
+        Returns:
+            List of embedding IDs indexed with that segmentor.
+        """
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+
+        c.execute(
+            "SELECT embedding_id FROM detections WHERE segmentor_model = ?",
+            (segmentor_model,)
+        )
+        ids = [row[0] for row in c.fetchall()]
+
+        conn.close()
+        return ids
 
     def has_post(self, post_id: str) -> bool:
         """Check if a post has already been indexed.

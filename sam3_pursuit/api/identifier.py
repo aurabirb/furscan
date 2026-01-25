@@ -25,6 +25,7 @@ class IdentificationResult:
     distance: float
     post_id: str
     bbox: tuple[int, int, int, int]  # x, y, width, height
+    segmentor_model: str = "unknown"  # Which segmentor indexed this result
 
 
 class SAM3FursuitIdentifier:
@@ -134,7 +135,8 @@ class SAM3FursuitIdentifier:
                 distance=float(distance),
                 post_id=detection.post_id,
                 bbox=(detection.bbox_x, detection.bbox_y,
-                      detection.bbox_width, detection.bbox_height)
+                      detection.bbox_width, detection.bbox_height),
+                segmentor_model=detection.segmentor_model
             ))
 
         results.sort(key=lambda x: x.confidence, reverse=True)
@@ -190,7 +192,8 @@ class SAM3FursuitIdentifier:
                             post_id=post_id,
                             character_name=character_name,
                             bbox=proc_result.segmentation.bbox,
-                            confidence=proc_result.segmentation.confidence
+                            confidence=proc_result.segmentation.confidence,
+                            segmentor_model=proc_result.segmentor_model
                         )
                         added_count += 1
             else:
@@ -221,11 +224,16 @@ class SAM3FursuitIdentifier:
         post_id: str,
         character_name: str,
         bbox: tuple[int, int, int, int],
-        confidence: float
+        confidence: float,
+        segmentor_model: Optional[str] = None
     ):
         """Add a single embedding to the index and database."""
         # Add to FAISS index
         embedding_id = self.index.add(embedding.reshape(1, -1))
+
+        # Use current pipeline's segmentor model if not specified
+        if segmentor_model is None:
+            segmentor_model = self.pipeline.segmentor_model_name
 
         # Add to database
         detection = Detection(
@@ -237,7 +245,8 @@ class SAM3FursuitIdentifier:
             bbox_y=bbox[1],
             bbox_width=bbox[2],
             bbox_height=bbox[3],
-            confidence=confidence
+            confidence=confidence,
+            segmentor_model=segmentor_model
         )
         self.db.add_detection(detection)
 

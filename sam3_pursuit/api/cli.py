@@ -145,6 +145,12 @@ def stats_command(identifier: SAM3FursuitIdentifier):
     print(f"Unique posts: {stats['unique_posts']}")
     print(f"Index size: {stats['index_size']}")
 
+    # Show segmentor breakdown
+    if stats.get('segmentor_breakdown'):
+        print("\nSegmentor breakdown:")
+        for model, count in stats['segmentor_breakdown'].items():
+            print(f"  {model}: {count} embeddings")
+
     if stats['top_characters']:
         print("\nTop characters:")
         for name, count in stats['top_characters']:
