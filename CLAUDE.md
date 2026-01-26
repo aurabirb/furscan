@@ -5,13 +5,14 @@ Fursuit character recognition system using SAM3 + DINOv2. Identifies fursuit cha
 ## How It Works
 
 ```
-Image → SAM3 (detect "fursuiter") → DINOv2 (768D embedding) → FAISS (similarity search) → Results
+Image → SAM3 (detect "fursuiter") → Background Isolation → DINOv2 (768D embedding) → FAISS (similarity search) → Results
 ```
 
 1. **SAM3** segments all fursuiters in the image using the text prompt `"fursuiter"`
-2. **DINOv2** generates a 768-dimensional embedding for each detected fursuiter
-3. **FAISS** finds the most similar embeddings in the database
-4. Results are returned with character names and confidence scores
+2. **Background Isolation** replaces the background with a solid color or blur to reduce noise
+3. **DINOv2** generates a 768-dimensional embedding for each isolated fursuiter crop
+4. **FAISS** finds the most similar embeddings in the database
+5. Results are returned with character names and confidence scores
 
 ## Requirements
 
@@ -138,17 +139,28 @@ python tgbot.py
 
 ```python
 from sam3_pursuit import SAM3FursuitIdentifier
+from sam3_pursuit.models.preprocessor import IsolationConfig
 from PIL import Image
 
-# Initialize (loads SAM3 + DINOv2)
+# Initialize with default settings (loads SAM3 + DINOv2)
 identifier = SAM3FursuitIdentifier()
+
+# Or customize background isolation
+isolation_config = IsolationConfig(
+    mode="solid",                    # "solid", "blur", or "none"
+    background_color=(128, 128, 128),  # Gray background
+    blur_radius=25                   # For blur mode
+)
+identifier = SAM3FursuitIdentifier(isolation_config=isolation_config)
 
 # Identify character in image
 image = Image.open("photo.jpg")
 results = identifier.identify(image, top_k=5)
 
-for result in results:
-    print(f"{result.character_name}: {result.confidence:.1%}")
+for segment in results:
+    print(f"Segment {segment.segment_index} at {segment.segment_bbox}:")
+    for match in segment.matches:
+        print(f"  {match.character_name}: {match.confidence:.1%}")
 
 # Add images for characters
 identifier.add_images(["MyCharacter", "Zygote"], ["img1.jpg", "img2.jpg"])
@@ -170,12 +182,27 @@ image = Image.open("photo.jpg")
 # Segment with default concept ("fursuiter")
 results = segmentor.segment(image)
 
-# Segment with custom concept
-results = segmentor.segment(image, concept="mascot")
-
 for r in results:
     print(f"Found: bbox={r.bbox}, confidence={r.confidence:.2f}")
     r.crop.save(f"crop_{r.bbox[0]}.jpg")
+    # Also available: r.mask, r.crop_mask for background isolation
+```
+
+### Using background isolation
+
+```python
+from sam3_pursuit.models.preprocessor import BackgroundIsolator, IsolationConfig
+from PIL import Image
+import numpy as np
+
+# Configure isolation
+config = IsolationConfig(mode="solid", background_color=(128, 128, 128))
+isolator = BackgroundIsolator(config)
+
+# Isolate foreground from background using a mask
+crop = Image.open("crop.jpg")
+mask = np.ones((crop.height, crop.width), dtype=np.uint8)  # Binary mask
+isolated = isolator.isolate(crop, mask)
 ```
 
 ## Building a Database
@@ -236,10 +263,11 @@ pursuit/
 │   │   ├── cli.py          # Command-line interface
 │   │   └── identifier.py   # Main API: SAM3FursuitIdentifier
 │   ├── models/
-│   │   ├── segmentor.py    # SAM3 segmentation with text prompts
-│   │   └── embedder.py     # DINOv2 embeddings
+│   │   ├── segmentor.py    # SAM3 segmentation (FursuitSegmentor, FullImageSegmentor)
+│   │   ├── embedder.py     # DINOv2 embeddings (FursuitEmbedder)
+│   │   └── preprocessor.py # Background isolation (BackgroundIsolator, IsolationConfig)
 │   ├── pipeline/
-│   │   └── processor.py    # Segmentation + embedding pipeline
+│   │   └── processor.py    # Segmentation + isolation + embedding pipeline
 │   ├── storage/
 │   │   ├── database.py     # SQLite metadata storage
 │   │   └── vector_index.py # FAISS vector index
@@ -272,13 +300,28 @@ These files are gitignored. Use `--db` and `--index` flags to use custom paths.
 Key settings in `sam3_pursuit/config.py`:
 
 ```python
+# File paths
 DEFAULT_DB_NAME = "pursuit.db"         # Default database file
 DEFAULT_INDEX_NAME = "pursuit.index"   # Default index file
+
+# Models
 SAM3_MODEL = "sam3"                    # Model name
 DINOV2_MODEL = "facebook/dinov2-base"  # Embedding model
 EMBEDDING_DIM = 768                    # DINOv2 output dimension
+
+# Detection
 DEFAULT_CONCEPT = "fursuiter"          # SAM3 text prompt
 DETECTION_CONFIDENCE = 0.5             # Minimum confidence threshold
+MAX_DETECTIONS = 10                    # Max segments per image
+
+# Background isolation
+DEFAULT_BACKGROUND_MODE = "solid"      # "solid", "blur", or "none"
+DEFAULT_BACKGROUND_COLOR = (128, 128, 128)  # Gray background
+DEFAULT_BLUR_RADIUS = 25               # Blur radius for "blur" mode
+
+# Image processing
+PATCH_SIZE = 14                        # DINOv2 patch size
+TARGET_IMAGE_SIZE = 630                # Resize target (multiple of PATCH_SIZE)
 ```
 
 ## Environment Variables
