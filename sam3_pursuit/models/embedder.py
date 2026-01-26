@@ -9,6 +9,36 @@ from transformers import AutoImageProcessor, AutoModel
 
 from sam3_pursuit.config import Config
 
+# DINOv2 patch size - image dimensions must be multiples of this
+PATCH_SIZE = 14
+
+
+def _resize_to_patch_multiple(image: Image.Image, target_size: int = 630) -> Image.Image:
+    """Resize image so dimensions are multiples of PATCH_SIZE.
+
+    Args:
+        image: Input image
+        target_size: Target size for the longer edge (must be multiple of PATCH_SIZE)
+
+    Returns:
+        Resized image with dimensions as multiples of PATCH_SIZE
+    """
+    w, h = image.size
+
+    # Scale to target size on longer edge
+    if w >= h:
+        new_w = target_size
+        new_h = int(h * target_size / w)
+    else:
+        new_h = target_size
+        new_w = int(w * target_size / h)
+
+    # Round to nearest multiple of PATCH_SIZE
+    new_w = max(PATCH_SIZE, (new_w // PATCH_SIZE) * PATCH_SIZE)
+    new_h = max(PATCH_SIZE, (new_h // PATCH_SIZE) * PATCH_SIZE)
+
+    return image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
 
 class FursuitEmbedder:
     """DINOv2 embeddings for visual similarity search."""
@@ -26,7 +56,7 @@ class FursuitEmbedder:
 
     def embed(self, image: Image.Image) -> np.ndarray:
         """Generate L2-normalized embedding for an image."""
-        image = image.convert("RGB")
+        image = _resize_to_patch_multiple(image.convert("RGB"))
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
 
         with torch.no_grad():
@@ -41,7 +71,7 @@ class FursuitEmbedder:
         if not images:
             return np.array([], dtype=np.float32)
 
-        images = [img.convert("RGB") for img in images]
+        images = [_resize_to_patch_multiple(img.convert("RGB")) for img in images]
         inputs = self.processor(images=images, return_tensors="pt").to(self.device)
 
         with torch.no_grad():

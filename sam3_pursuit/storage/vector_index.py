@@ -62,6 +62,11 @@ class VectorIndex:
     def size(self) -> int:
         return self.index.ntotal
 
+    @property
+    def index_type(self) -> str:
+        """Return short index type identifier."""
+        return "hnsw"
+
     def reset(self):
         self.index = faiss.IndexHNSWFlat(self.embedding_dim, self.hnsw_m)
         self.index.hnsw.efConstruction = self.ef_construction

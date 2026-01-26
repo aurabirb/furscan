@@ -1,6 +1,5 @@
 """Main API for fursuit character identification."""
 
-import json
 import os
 from dataclasses import dataclass
 from io import BytesIO
@@ -46,6 +45,46 @@ class SAM3FursuitIdentifier:
         self.pipeline = ProcessingPipeline(device=self.device, isolation_config=isolation_config)
 
         print(f"Identifier ready. Index: {self.index.size} embeddings")
+
+    def _build_preprocessing_info(self) -> str:
+        """Build compact preprocessing metadata string.
+
+        Format: pipe-separated key:value pairs
+        Keys: bg (background mode), bgc (color hex), br (blur radius),
+              emb (embedder), idx (index type)
+        """
+        parts = []
+        iso = self.pipeline.isolation_config
+
+        # Background mode: s=solid, b=blur, n=none
+        mode_map = {"solid": "s", "blur": "b", "none": "n"}
+        parts.append(f"bg:{mode_map.get(iso.mode, 'n')}")
+
+        # Background color (only for solid mode, as hex without #)
+        if iso.mode == "solid":
+            r, g, b = iso.background_color
+            parts.append(f"bgc:{r:02x}{g:02x}{b:02x}")
+
+        # Blur radius (only for blur mode)
+        if iso.mode == "blur":
+            parts.append(f"br:{iso.blur_radius}")
+
+        # Embedder model (shortened)
+        emb = self.pipeline.embedder_model_name
+        if "dinov2-base" in emb:
+            emb = "dv2b"
+        elif "dinov2-large" in emb:
+            emb = "dv2l"
+        elif "dinov2-giant" in emb:
+            emb = "dv2g"
+        else:
+            emb = emb.split("/")[-1][:8]  # Last part, max 8 chars
+        parts.append(f"emb:{emb}")
+
+        # Index type
+        parts.append(f"idx:{self.index.index_type}")
+
+        return "|".join(parts)
 
     def identify(
         self,
@@ -124,6 +163,8 @@ class SAM3FursuitIdentifier:
                 print(f"Error loading {img_path}: {e}")
                 continue
 
+            preprocessing_info = self._build_preprocessing_info()
+
             if use_segmentation:
                 proc_results = self.pipeline.process(image, concept=concept)
                 for proc_result in proc_results:
@@ -140,6 +181,7 @@ class SAM3FursuitIdentifier:
                         source_url=source_url,
                         is_cropped=True,
                         segmentation_concept=concept,
+                        preprocessing_info=preprocessing_info,
                         crop_image=crop_to_save,
                     )
                     added_count += 1
@@ -156,6 +198,7 @@ class SAM3FursuitIdentifier:
                     source_url=source_url,
                     is_cropped=False,
                     segmentation_concept=None,
+                    preprocessing_info=preprocessing_info,
                 )
                 added_count += 1
 
@@ -176,7 +219,7 @@ class SAM3FursuitIdentifier:
         source_url: Optional[str] = None,
         is_cropped: bool = False,
         segmentation_concept: Optional[str] = None,
-        preprocessing_info: Optional[dict] = None,
+        preprocessing_info: Optional[str] = None,
         crop_image: Optional[Image.Image] = None,
     ):
         embedding_id = self.index.add(embedding.reshape(1, -1))
@@ -206,7 +249,7 @@ class SAM3FursuitIdentifier:
             source_url=source_url,
             is_cropped=is_cropped,
             segmentation_concept=segmentation_concept,
-            preprocessing_info=json.dumps(preprocessing_info) if preprocessing_info else None,
+            preprocessing_info=preprocessing_info,
             crop_path=crop_path,
         )
         self.db.add_detection(detection)

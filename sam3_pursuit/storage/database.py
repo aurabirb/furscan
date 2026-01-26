@@ -205,6 +205,13 @@ class Database:
         """)
         segmentor_breakdown = dict(c.fetchall())
 
+        c.execute("""
+            SELECT preprocessing_info, COUNT(*) as count FROM detections
+            WHERE preprocessing_info IS NOT NULL
+            GROUP BY preprocessing_info ORDER BY count DESC LIMIT 10
+        """)
+        preprocessing_breakdown = dict(c.fetchall())
+
         conn.close()
 
         return {
@@ -212,7 +219,8 @@ class Database:
             "unique_characters": unique_chars,
             "unique_posts": unique_posts,
             "top_characters": top_chars,
-            "segmentor_breakdown": segmentor_breakdown
+            "segmentor_breakdown": segmentor_breakdown,
+            "preprocessing_breakdown": preprocessing_breakdown
         }
 
     def has_post(self, post_id: str) -> bool:

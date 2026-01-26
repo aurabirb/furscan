@@ -313,6 +313,8 @@ def show_command(args):
                 print(f"  Source: {d.source_filename}")
             if d.segmentation_concept:
                 print(f"  Concept: {d.segmentation_concept}")
+            if d.preprocessing_info:
+                print(f"  Preprocessing: {d.preprocessing_info}")
             if d.crop_path:
                 print(f"  Crop: {d.crop_path}")
             if d.created_at:
@@ -490,7 +492,12 @@ def stats_command(args):
         if stats.get('segmentor_breakdown'):
             print("\nSegmentor breakdown:")
             for model, count in stats['segmentor_breakdown'].items():
-                print(f"  {model}: {count} embeddings")
+                print(f"  {model}: {count}")
+
+        if stats.get('preprocessing_breakdown'):
+            print("\nPreprocessing configs:")
+            for config, count in stats['preprocessing_breakdown'].items():
+                print(f"  {config}: {count}")
 
         if stats['top_characters']:
             print("\nTop characters:")

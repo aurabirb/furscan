@@ -88,3 +88,11 @@ class ProcessingPipeline:
     @property
     def segmentor_model_name(self) -> str:
         return self.segmentor.model_name
+
+    @property
+    def embedder_model_name(self) -> str:
+        return self.embedder.model_name
+
+    @property
+    def isolation_config(self) -> IsolationConfig:
+        return self.isolator.config
