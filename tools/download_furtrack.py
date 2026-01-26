@@ -14,6 +14,7 @@ import argparse
 import concurrent.futures
 import json
 import os
+from pathlib import Path
 import random
 import sqlite3
 from typing import Optional
@@ -202,7 +203,7 @@ def download_images(url_names: list[tuple[str, str]], folder: str) -> int:
     """Download images to folder."""
     os.makedirs(folder, exist_ok=True)
 
-    existing = set(os.listdir(folder))
+    existing = set([Path(p).stem for p in os.listdir(folder)])
     to_download = [(u, n) for u, n in url_names if f"{n}.jpg" not in existing]
 
     if len(to_download) < len(url_names):
