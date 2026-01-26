@@ -49,6 +49,9 @@ class ProcessingPipeline:
 
     def process(self, image: Image.Image) -> list[ProcessingResult]:
         segmentations = self.segmentor.segment(image)
+        # sort by confidence descending
+        segmentations.sort(key=lambda s: s.confidence, reverse=True)
+        segmentations = segmentations[:Config.MAX_DETECTIONS]
         results = []
         for seg in segmentations:
             isolated = self.isolator.isolate(seg.crop, seg.crop_mask)

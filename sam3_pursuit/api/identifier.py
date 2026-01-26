@@ -59,8 +59,6 @@ class SAM3FursuitIdentifier:
         seg = self.pipeline.segmentor_model_name or ""
         parts.append(f"seg:{seg}")
         if seg:
-            seg_concept = self.pipeline.segmentor_concept or ""
-            parts.append(f"sc:{seg_concept}")
             iso = self.pipeline.isolation_config
             mode_map = {"solid": "s", "blur": "b", "none": "n"}
             parts.append(f"bg:{mode_map.get(iso.mode, 'n')}")

@@ -69,10 +69,10 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = []
         for i, result in enumerate(results, 1):
             lines.append(f"Characters at segment {i}:")
-            for m in result.matches:
+            for n, m in enumerate(result.matches):
                 name = m.character_name or "Unknown"
                 confidence = m.confidence * 100
-                lines.append(f"{i}. {name} ({confidence:.1f}%)")
+                lines.append(f"{n+1}. {name} ({confidence:.1f}%)")
 
         msg = "\n".join(lines)
         print(msg)
