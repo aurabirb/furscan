@@ -27,6 +27,11 @@ class Config:
     MAX_DETECTIONS = 10
     DEFAULT_CONCEPT = "fursuiter"
 
+    # Background isolation
+    DEFAULT_BACKGROUND_MODE = "solid"
+    DEFAULT_BACKGROUND_COLOR = (128, 128, 128)
+    DEFAULT_BLUR_RADIUS = 25
+
     # Search
     DEFAULT_TOP_K = 5
     HNSW_M = 32

@@ -13,6 +13,7 @@ from sam3_pursuit.config import Config
 class SegmentationResult:
     crop: Image.Image
     mask: np.ndarray
+    crop_mask: np.ndarray  # mask cropped to bbox, same size as crop
     bbox: tuple[int, int, int, int]  # (x, y, width, height)
     confidence: float
 
@@ -86,9 +87,11 @@ class FursuitSegmentor:
                     continue
 
                 crop = self._create_crop(image, bbox)
+                crop_mask = self._create_crop_mask(mask, bbox)
                 segmentation_results.append(SegmentationResult(
                     crop=crop,
                     mask=mask.astype(np.uint8),
+                    crop_mask=crop_mask,
                     bbox=bbox,
                     confidence=confidence
                 ))
@@ -96,9 +99,11 @@ class FursuitSegmentor:
         # Fallback: return full image if no segments found
         if not segmentation_results:
             w, h = image.size
+            full_mask = np.ones((h, w), dtype=np.uint8)
             segmentation_results.append(SegmentationResult(
                 crop=image.copy(),
-                mask=np.ones((h, w), dtype=np.uint8),
+                mask=full_mask,
+                crop_mask=full_mask,
                 bbox=(0, 0, w, h),
                 confidence=1.0
             ))
@@ -120,3 +125,8 @@ class FursuitSegmentor:
     def _create_crop(self, image: Image.Image, bbox: tuple[int, int, int, int]) -> Image.Image:
         x, y, w, h = bbox
         return image.crop((x, y, x + w, y + h))
+
+    def _create_crop_mask(self, mask: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
+        """Crop mask to bounding box region."""
+        x, y, w, h = bbox
+        return mask[y:y + h, x:x + w].astype(np.uint8)

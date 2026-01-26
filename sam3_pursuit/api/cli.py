@@ -41,10 +41,17 @@ Examples:
   pursuit stats
         """
     )
-    parser.add_argument("--db", default=Config.DB_PATH, help="Database pat")
-    parser.add_argument("--index", default=Config.INDEX_PATH, help="Index pat")
+    parser.add_argument("--db", default=Config.DB_PATH, help="Database path")
+    parser.add_argument("--index", default=Config.INDEX_PATH, help="Index path")
     parser.add_argument("--no-segment", "-S", dest="segment", action="store_false", help="Do not use segmentation")
     parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
+    parser.add_argument("--background", "-bg", default=Config.DEFAULT_BACKGROUND_MODE,
+                        choices=["none", "solid", "blur"],
+                        help="Background isolation mode (default: solid)")
+    parser.add_argument("--bg-color", default="128,128,128",
+                        help="Background color as R,G,B for solid mode (default: 128,128,128)")
+    parser.add_argument("--blur-radius", type=int, default=Config.DEFAULT_BLUR_RADIUS,
+                        help="Blur radius for blur mode (default: 25)")
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -106,14 +113,37 @@ Examples:
         stats_command(args)
 
 
+def _get_isolation_config(args):
+    """Create IsolationConfig from CLI args."""
+    from sam3_pursuit.models.preprocessor import IsolationConfig
+
+    bg_color = Config.DEFAULT_BACKGROUND_COLOR
+    if hasattr(args, "bg_color") and args.bg_color:
+        try:
+            parts = args.bg_color.split(",")
+            bg_color = (int(parts[0]), int(parts[1]), int(parts[2]))
+        except (ValueError, IndexError):
+            print(f"Warning: Invalid bg-color '{args.bg_color}', using default")
+
+    mode = args.background if hasattr(args, "background") else Config.DEFAULT_BACKGROUND_MODE
+    blur_radius = args.blur_radius if hasattr(args, "blur_radius") else Config.DEFAULT_BLUR_RADIUS
+
+    return IsolationConfig(
+        mode=mode,
+        background_color=bg_color,
+        blur_radius=blur_radius
+    )
+
+
 def _get_identifier(args):
     """Create identifier with optional custom paths."""
     from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
 
     db_path = args.db if hasattr(args, "db") and args.db else Config.DB_PATH
     index_path = args.index if hasattr(args, "index") and args.index else Config.INDEX_PATH
+    isolation_config = _get_isolation_config(args)
 
-    return SAM3FursuitIdentifier(db_path=db_path, index_path=index_path)
+    return SAM3FursuitIdentifier(db_path=db_path, index_path=index_path, isolation_config=isolation_config)
 
 
 def identify_command(args):
@@ -172,6 +202,7 @@ def add_command(args):
 def segment_command(args):
     """Handle segment command - test segmentation on an image."""
     from sam3_pursuit.models.segmentor import FursuitSegmentor
+    from sam3_pursuit.models.preprocessor import BackgroundIsolator
 
     image_path = Path(args.image)
 
@@ -180,6 +211,8 @@ def segment_command(args):
         sys.exit(1)
 
     segmentor = FursuitSegmentor()
+    isolation_config = _get_isolation_config(args)
+    isolator = BackgroundIsolator(isolation_config)
     image = Image.open(image_path)
 
     results = segmentor.segment(image, concept=args.concept)
@@ -188,6 +221,7 @@ def segment_command(args):
         output = {
             "image": str(image_path),
             "concept": args.concept,
+            "background_mode": isolation_config.mode,
             "segments": [
                 {
                     "index": i,
@@ -202,6 +236,7 @@ def segment_command(args):
     else:
         print(f"\nSegmentation results for {image_path}")
         print(f"Concept: {args.concept}")
+        print(f"Background: {isolation_config.mode}")
         print(f"Found {len(results)} segment(s):\n")
 
         for i, r in enumerate(results):
@@ -213,8 +248,10 @@ def segment_command(args):
         base_name = image_path.stem
 
         for i, r in enumerate(results):
+            # Apply background isolation before saving
+            isolated_crop = isolator.isolate(r.crop, r.crop_mask)
             crop_path = output_dir / f"{base_name}_crop_{i}.jpg"
-            r.crop.convert("RGB").save(crop_path, quality=90)
+            isolated_crop.convert("RGB").save(crop_path, quality=90)
             print(f"Saved: {crop_path}")
 
 

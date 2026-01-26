@@ -12,6 +12,7 @@ import requests
 from PIL import Image
 
 from sam3_pursuit.config import Config
+from sam3_pursuit.models.preprocessor import IsolationConfig
 from sam3_pursuit.pipeline.processor import ProcessingPipeline
 from sam3_pursuit.storage.database import Database, Detection
 from sam3_pursuit.storage.vector_index import VectorIndex
@@ -34,14 +35,15 @@ class SAM3FursuitIdentifier:
         self,
         db_path: str = Config.DB_PATH,
         index_path: str = Config.INDEX_PATH,
-        device: Optional[str] = None
+        device: Optional[str] = None,
+        isolation_config: Optional[IsolationConfig] = None
     ):
         self.device = device or Config.get_device()
         print(f"Initializing SAM3FursuitIdentifier on {self.device}")
 
         self.db = Database(db_path)
         self.index = VectorIndex(index_path)
-        self.pipeline = ProcessingPipeline(device=self.device)
+        self.pipeline = ProcessingPipeline(device=self.device, isolation_config=isolation_config)
 
         print(f"Identifier ready. Index: {self.index.size} embeddings")
 
@@ -125,6 +127,8 @@ class SAM3FursuitIdentifier:
             if use_segmentation:
                 proc_results = self.pipeline.process(image, concept=concept)
                 for proc_result in proc_results:
+                    # Use isolated_crop for saving (includes background isolation)
+                    crop_to_save = proc_result.isolated_crop if save_crops else None
                     self._add_single_embedding(
                         embedding=proc_result.embedding,
                         post_id=post_id,
@@ -136,7 +140,7 @@ class SAM3FursuitIdentifier:
                         source_url=source_url,
                         is_cropped=True,
                         segmentation_concept=concept,
-                        crop_image=proc_result.segmentation.crop if save_crops else None,
+                        crop_image=crop_to_save,
                     )
                     added_count += 1
             else:
