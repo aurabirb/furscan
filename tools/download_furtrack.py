@@ -240,6 +240,9 @@ def get_all_characters() -> list[str]:
     """Get list of all character tags from FurTrack."""
     url = "https://solar.furtrack.com/get/tags/all"
     data = get_json(url)
+    # Save all tags to file
+    with open("furtrack_tags.json", "w") as f:
+        json.dump(data, f, indent=2)
     return [
         t["tagName"].removeprefix("1:")
         for t in data.get("tags", [])
@@ -316,7 +319,7 @@ def index_downloaded_images():
         img_path = os.path.join(IMAGES_DIR, f"{post_id}.jpg")
         if os.path.exists(img_path) and not identifier.db.has_post(post_id):
             try:
-                identifier.add_images(char, [img_path])
+                identifier.add_images([char], [img_path])
                 indexed += 1
             except Exception as e:
                 print(f"Error indexing {post_id}: {e}")
