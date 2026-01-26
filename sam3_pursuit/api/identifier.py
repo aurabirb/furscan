@@ -1,6 +1,7 @@
 """Main API for fursuit character identification."""
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -146,29 +147,87 @@ class SAM3FursuitIdentifier:
         concept: str = Config.DEFAULT_CONCEPT,
         save_crops: bool = False,
         source_url: Optional[str] = None,
+        num_workers: int = 4,
     ) -> int:
-        """Add images for characters to the index."""
-        added_count = 0
+        """Add images for characters to the index.
 
+        Args:
+            character_names: List of character names for each image
+            image_paths: List of image paths
+            batch_size: Batch size for embedding (used when use_segmentation=False)
+            use_segmentation: Whether to use SAM3 segmentation
+            concept: SAM3 concept for segmentation
+            save_crops: Whether to save crop images
+            source_url: Optional source URL
+            num_workers: Number of threads for parallel image loading
+
+        Returns:
+            Number of embeddings added
+        """
         assert len(character_names) == len(image_paths)
 
-        for i in range(0, len(image_paths)):
-            try:
-                character_name = character_names[i]
-                img_path = image_paths[i]
-                image = self._load_image(img_path)
+        if use_segmentation:
+            return self._add_images_with_segmentation(
+                character_names, image_paths, concept, save_crops, source_url, num_workers
+            )
+        else:
+            return self._add_images_batched(
+                character_names, image_paths, batch_size, save_crops, source_url, num_workers
+            )
+
+    def _load_image_task(self, args: tuple) -> tuple:
+        """Load a single image (for thread pool). Returns (index, image, error)."""
+        idx, img_path = args
+        try:
+            image = self._load_image(img_path)
+            return (idx, image, None)
+        except Exception as e:
+            return (idx, None, str(e))
+
+    def _add_images_with_segmentation(
+        self,
+        character_names: list[str],
+        image_paths: list[str],
+        concept: str,
+        save_crops: bool,
+        source_url: Optional[str],
+        num_workers: int,
+    ) -> int:
+        """Add images with segmentation (parallel loading, sequential processing)."""
+        added_count = 0
+        preprocessing_info = self._build_preprocessing_info()
+        total = len(image_paths)
+
+        # Process in chunks to limit memory usage
+        chunk_size = num_workers * 2
+
+        for chunk_start in range(0, total, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, total)
+            chunk_indices = range(chunk_start, chunk_end)
+
+            # Parallel load images in this chunk
+            loaded = {}
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                tasks = [(i, image_paths[i]) for i in chunk_indices]
+                for idx, image, error in executor.map(self._load_image_task, tasks):
+                    if error:
+                        print(f"Error loading {image_paths[idx]}: {error}")
+                    else:
+                        loaded[idx] = image
+
+            # Process loaded images sequentially (GPU operations)
+            for idx in chunk_indices:
+                if idx not in loaded:
+                    continue
+
+                image = loaded[idx]
+                character_name = character_names[idx]
+                img_path = image_paths[idx]
                 post_id = self._extract_post_id(img_path)
                 filename = os.path.basename(img_path)
-            except Exception as e:
-                print(f"Error loading {img_path}: {e}")
-                continue
 
-            preprocessing_info = self._build_preprocessing_info()
-
-            if use_segmentation:
                 proc_results = self.pipeline.process(image, concept=concept)
                 for proc_result in proc_results:
-                    # Use isolated_crop for saving (includes background isolation)
                     crop_to_save = proc_result.isolated_crop if save_crops else None
                     self._add_single_embedding(
                         embedding=proc_result.embedding,
@@ -185,11 +244,64 @@ class SAM3FursuitIdentifier:
                         crop_image=crop_to_save,
                     )
                     added_count += 1
-            else:
-                embedding = self.pipeline.embed_only(image)
+
+                # Free memory
+                del loaded[idx]
+
+            print(f"Processed {min(chunk_end, total)}/{total} images, {added_count} embeddings")
+
+        self.index.save()
+        return added_count
+
+    def _add_images_batched(
+        self,
+        character_names: list[str],
+        image_paths: list[str],
+        batch_size: int,
+        save_crops: bool,
+        source_url: Optional[str],
+        num_workers: int,
+    ) -> int:
+        """Add images without segmentation (batched embedding)."""
+        added_count = 0
+        preprocessing_info = self._build_preprocessing_info()
+        total = len(image_paths)
+
+        for batch_start in range(0, total, batch_size):
+            batch_end = min(batch_start + batch_size, total)
+            batch_indices = list(range(batch_start, batch_end))
+
+            # Parallel load images
+            loaded = {}
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                tasks = [(i, image_paths[i]) for i in batch_indices]
+                for idx, image, error in executor.map(self._load_image_task, tasks):
+                    if error:
+                        print(f"Error loading {image_paths[idx]}: {error}")
+                    else:
+                        loaded[idx] = image
+
+            # Collect valid images for batched embedding
+            valid_indices = [i for i in batch_indices if i in loaded]
+            if not valid_indices:
+                continue
+
+            images = [loaded[i] for i in valid_indices]
+
+            # Batch embed
+            embeddings = self.pipeline.embed_batch(images)
+
+            # Add to index
+            for i, idx in enumerate(valid_indices):
+                image = loaded[idx]
+                character_name = character_names[idx]
+                img_path = image_paths[idx]
+                post_id = self._extract_post_id(img_path)
+                filename = os.path.basename(img_path)
                 w, h = image.size
+
                 self._add_single_embedding(
-                    embedding=embedding,
+                    embedding=embeddings[i],
                     post_id=post_id,
                     character_name=character_name,
                     bbox=(0, 0, w, h),
@@ -202,7 +314,7 @@ class SAM3FursuitIdentifier:
                 )
                 added_count += 1
 
-            print(f"Added {added_count} images...")
+            print(f"Processed {min(batch_end, total)}/{total} images")
 
         self.index.save()
         return added_count

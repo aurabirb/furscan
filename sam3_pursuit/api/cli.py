@@ -65,6 +65,7 @@ Examples:
     add_parser.add_argument("--character", "-c", required=True, help="Character name")
     add_parser.add_argument("images", nargs="+", help="Image paths")
     add_parser.add_argument("--save-crops", action="store_true", help="Save crop images for debugging")
+    add_parser.add_argument("--workers", "-j", type=int, default=4, help="Parallel image loading threads (default: 4)")
 
     # Segment command (NEW)
     segment_parser = subparsers.add_parser("segment", help="Test segmentation on an image")
@@ -86,6 +87,7 @@ Examples:
     ingest_parser.add_argument("--data-dir", required=True, help="Data directory")
     ingest_parser.add_argument("--limit", type=int, help="Limit number of images per character")
     ingest_parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
+    ingest_parser.add_argument("--workers", "-j", type=int, default=4, help="Parallel image loading threads (default: 4)")
     ingest_parser.add_argument("--save-crops", action="store_true", help="Save crop images")
 
     # Stats command
@@ -188,12 +190,14 @@ def add_command(args):
         sys.exit(1)
 
     identifier = _get_identifier(args)
+    num_workers = args.workers if hasattr(args, "workers") else 4
     added = identifier.add_images(
         character_names=[args.character] * len(valid_paths),
         image_paths=valid_paths,
         use_segmentation=args.segment,
         concept=args.concept,
         save_crops=args.save_crops,
+        num_workers=num_workers,
     )
 
     print(f"\nAdded {added} images for character '{args.character}'")
@@ -363,6 +367,7 @@ def ingest_from_directory(identifier, args):
                 use_segmentation=args.segment,
                 concept=args.concept,
                 save_crops=args.save_crops,
+                num_workers=args.workers,
             )
             total_added += added
 
@@ -425,6 +430,7 @@ def ingest_from_furtrack(identifier, args):
             use_segmentation=args.segment,
             concept=args.concept,
             save_crops=args.save_crops,
+            num_workers=args.workers,
         )
         total_added += added
 
@@ -464,10 +470,11 @@ def ingest_from_nfc25(identifier, args):
     added = identifier.add_images(
         character_names=char_names,
         image_paths=img_paths,
-        # batch_size=1,
+        batch_size=args.batch_size,
         use_segmentation=False,
         concept=args.concept,
         save_crops=args.save_crops,
+        num_workers=args.workers,
     )
     total_added += added
 
