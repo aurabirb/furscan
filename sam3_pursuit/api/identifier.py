@@ -158,15 +158,6 @@ class SAM3FursuitIdentifier:
         except Exception as e:
             return (idx, None, str(e))
 
-    def _load_chunk(self, indices: list[int], image_paths: list[str], num_workers: int) -> dict:
-        loaded = {}
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            tasks = [(i, image_paths[i]) for i in indices]
-            for idx, image, error in executor.map(self._load_image_task, tasks):
-                if not error:
-                    loaded[idx] = image
-        return loaded
-
     def _add_images_with_segmentation(
         self,
         character_names: list[str],
@@ -189,63 +180,55 @@ class SAM3FursuitIdentifier:
             return 0
 
         total = len(filtered_indices)
-        chunk_size = max(16, num_workers * 2)
+        save_interval = 50  # Save index every N images
 
-        chunks = [filtered_indices[i:i + chunk_size] for i in range(0, total, chunk_size)]
+        for i, idx in enumerate(filtered_indices):
+            character_name = character_names[idx]
+            img_path = image_paths[idx]
+            post_id = self._extract_post_id(img_path)
+            filename = os.path.basename(img_path)
 
-        # Load and segment first chunk
-        loaded = self._load_chunk(chunks[0], image_paths, num_workers)
-        valid_indices = [i for i in chunks[0] if i in loaded]
-        images = [loaded[i] for i in valid_indices]
-        current_segs = self.pipeline.segment_batch(images, concept=concept) if images else []
-        current_data = (valid_indices, current_segs)
+            # Load image
+            try:
+                image = self._load_image(img_path)
+            except Exception as e:
+                print(f"[{i+1}/{total}] Failed to load {filename}: {e}")
+                continue
 
-        for chunk_idx in range(len(chunks)):
-            valid_indices, all_segs = current_data
+            # Process: segment -> isolate -> embed
+            proc_results = self.pipeline.process(image, concept=concept)
 
-            # Start loading + segmenting next chunk in background
-            if chunk_idx + 1 < len(chunks):
-                next_loaded = self._load_chunk(chunks[chunk_idx + 1], image_paths, num_workers)
-                next_valid = [i for i in chunks[chunk_idx + 1] if i in next_loaded]
-                next_images = [next_loaded[i] for i in next_valid]
+            if not proc_results:
+                print(f"[{i+1}/{total}] {character_name}: no segments found")
+                continue
 
-            # Process current chunk (isolation + embedding) while next is being prepared
-            if valid_indices and all_segs:
-                batch_results = self.pipeline.isolate_and_embed(all_segs, num_workers=num_workers)
+            for proc_result in proc_results:
+                crop_to_save = proc_result.isolated_crop if save_crops else None
+                self._add_single_embedding(
+                    embedding=proc_result.embedding,
+                    post_id=post_id,
+                    character_name=character_name,
+                    bbox=proc_result.segmentation.bbox,
+                    confidence=proc_result.segmentation.confidence,
+                    segmentor_model=proc_result.segmentor_model,
+                    source_filename=filename,
+                    source_url=source_url,
+                    is_cropped=True,
+                    segmentation_concept=concept,
+                    preprocessing_info=preprocessing_info,
+                    crop_image=crop_to_save,
+                )
+                added_count += 1
 
-                for batch_idx, idx in enumerate(valid_indices):
-                    character_name = character_names[idx]
-                    img_path = image_paths[idx]
-                    post_id = self._extract_post_id(img_path)
-                    filename = os.path.basename(img_path)
+            print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments, {added_count} total")
 
-                    for proc_result in batch_results[batch_idx]:
-                        crop_to_save = proc_result.isolated_crop if save_crops else None
-                        self._add_single_embedding(
-                            embedding=proc_result.embedding,
-                            post_id=post_id,
-                            character_name=character_name,
-                            bbox=proc_result.segmentation.bbox,
-                            confidence=proc_result.segmentation.confidence,
-                            segmentor_model=proc_result.segmentor_model,
-                            source_filename=filename,
-                            source_url=source_url,
-                            is_cropped=True,
-                            segmentation_concept=concept,
-                            preprocessing_info=preprocessing_info,
-                            crop_image=crop_to_save,
-                        )
-                        added_count += 1
-
-            # Segment next batch (this is the slow part)
-            if chunk_idx + 1 < len(chunks):
-                next_segs = self.pipeline.segment_batch(next_images, concept=concept) if next_images else []
-                current_data = (next_valid, next_segs)
-
-            processed = min((chunk_idx + 1) * chunk_size, total)
-            print(f"Processed {processed}/{total} images, {added_count} embeddings")
+            # Periodically save index
+            if (i + 1) % save_interval == 0:
+                self.index.save()
+                print(f"  Index saved ({self.index.size} embeddings)")
 
         self.index.save()
+        print(f"Final index saved ({self.index.size} embeddings)")
         return added_count
 
     def _add_images_batched(
@@ -270,6 +253,7 @@ class SAM3FursuitIdentifier:
             return 0
 
         total = len(filtered_indices)
+        save_interval = 100  # Save index every N images
 
         for batch_start in range(0, total, batch_size):
             batch_end = min(batch_start + batch_size, total)
@@ -311,9 +295,15 @@ class SAM3FursuitIdentifier:
                 )
                 added_count += 1
 
-            print(f"Processed {min(batch_end, total)}/{total} images")
+            print(f"[{batch_end}/{total}] Added {added_count} embeddings")
+
+            # Periodically save index
+            if batch_end % save_interval < batch_size:
+                self.index.save()
+                print(f"  Index saved ({self.index.size} embeddings)")
 
         self.index.save()
+        print(f"Final index saved ({self.index.size} embeddings)")
         return added_count
 
     def _add_single_embedding(
