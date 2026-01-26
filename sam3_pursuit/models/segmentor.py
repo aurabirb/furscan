@@ -89,6 +89,7 @@ class FursuitSegmentor:
                 ))
 
         if not segmentation_results:
+            print(f"Warning: No segments found, using full image as fallback")
             w, h = image.size
             full_mask = np.ones((h, w), dtype=np.uint8)
             segmentation_results.append(SegmentationResult(

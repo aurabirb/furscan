@@ -79,6 +79,7 @@ class SAM3FursuitIdentifier:
         crop_prefix: str = "query",
     ) -> list[IdentificationResult] | list[SegmentResults]:
         if self.index.size == 0:
+            print("Warning: Index is empty, no matches possible")
             return []
 
         if use_segmentation:
@@ -222,12 +223,12 @@ class SAM3FursuitIdentifier:
 
             print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments, {added_count} total")
 
-            # Periodically save index
+            # Periodically save index with backup
             if (i + 1) % save_interval == 0:
-                self.index.save()
+                self.index.save(backup=True)
                 print(f"  Index saved ({self.index.size} embeddings)")
 
-        self.index.save()
+        self.index.save(backup=True)
         print(f"Final index saved ({self.index.size} embeddings)")
         return added_count
 
@@ -297,12 +298,12 @@ class SAM3FursuitIdentifier:
 
             print(f"[{batch_end}/{total}] Added {added_count} embeddings")
 
-            # Periodically save index
+            # Periodically save index with backup
             if batch_end % save_interval < batch_size:
-                self.index.save()
+                self.index.save(backup=True)
                 print(f"  Index saved ({self.index.size} embeddings)")
 
-        self.index.save()
+        self.index.save(backup=True)
         print(f"Final index saved ({self.index.size} embeddings)")
         return added_count
 

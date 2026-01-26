@@ -44,7 +44,13 @@ class VectorIndex:
         query = query.astype(np.float32)
         return self.index.search(query, top_k)
 
-    def save(self):
+    def save(self, backup: bool = False):
+        if backup and os.path.exists(self.index_path):
+            backup_path = f"{self.index_path}.bak"
+            try:
+                os.replace(self.index_path, backup_path)
+            except OSError:
+                pass  # Backup failed, continue with save
         faiss.write_index(self.index, self.index_path)
 
     @property
