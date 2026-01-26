@@ -111,63 +111,49 @@ class SAM3FursuitIdentifier:
 
         assert len(character_names) == len(image_paths)
 
-        for i in range(0, len(image_paths), batch_size):
-            batch_paths = image_paths[i:i + batch_size]
-            batch_char_names = character_names[i:i + batch_size]
-            batch_images = []
-            batch_post_ids = []
-            batch_filenames = []
-
-            for img_path in batch_paths:
-                try:
-                    image = self._load_image(img_path)
-                    batch_images.append(image)
-                    batch_post_ids.append(self._extract_post_id(img_path))
-                    batch_filenames.append(os.path.basename(img_path))
-                except Exception as e:
-                    print(f"Error loading {img_path}: {e}")
-                    continue
-
-            if not batch_images:
+        for i in range(0, len(image_paths)):
+            try:
+                character_name = character_names[i]
+                img_path = image_paths[i]
+                image = self._load_image(img_path)
+                post_id = self._extract_post_id(img_path)
+                filename = os.path.basename(img_path)
+            except Exception as e:
+                print(f"Error loading {img_path}: {e}")
                 continue
 
             if use_segmentation:
-                for image, post_id, filename, character_name in zip(batch_images, batch_post_ids, batch_filenames, batch_char_names):
-                    proc_results = self.pipeline.process(image, concept=concept)
-                    for proc_result in proc_results:
-                        self._add_single_embedding(
-                            embedding=proc_result.embedding,
-                            post_id=post_id,
-                            character_name=character_name,
-                            bbox=proc_result.segmentation.bbox,
-                            confidence=proc_result.segmentation.confidence,
-                            segmentor_model=proc_result.segmentor_model,
-                            source_filename=filename,
-                            source_url=source_url,
-                            is_cropped=True,
-                            segmentation_concept=concept,
-                            crop_image=proc_result.segmentation.crop if save_crops else None,
-                        )
-                        added_count += 1
-            else:
-                embeddings = self.pipeline.embed_batch(batch_images)
-
-                for embedding, post_id, image, filename in zip(
-                    embeddings, batch_post_ids, batch_images, batch_filenames
-                ):
-                    w, h = image.size
+                proc_results = self.pipeline.process(image, concept=concept)
+                for proc_result in proc_results:
                     self._add_single_embedding(
-                        embedding=embedding,
+                        embedding=proc_result.embedding,
                         post_id=post_id,
                         character_name=character_name,
-                        bbox=(0, 0, w, h),
-                        confidence=1.0,
+                        bbox=proc_result.segmentation.bbox,
+                        confidence=proc_result.segmentation.confidence,
+                        segmentor_model=proc_result.segmentor_model,
                         source_filename=filename,
                         source_url=source_url,
-                        is_cropped=False,
-                        segmentation_concept=None,
+                        is_cropped=True,
+                        segmentation_concept=concept,
+                        crop_image=proc_result.segmentation.crop if save_crops else None,
                     )
                     added_count += 1
+            else:
+                embedding = self.pipeline.embed_only(image)
+                w, h = image.size
+                self._add_single_embedding(
+                    embedding=embedding,
+                    post_id=post_id,
+                    character_name=character_name,
+                    bbox=(0, 0, w, h),
+                    confidence=1.0,
+                    source_filename=filename,
+                    source_url=source_url,
+                    is_cropped=False,
+                    segmentation_concept=None,
+                )
+                added_count += 1
 
             print(f"Added {added_count} images...")
 
