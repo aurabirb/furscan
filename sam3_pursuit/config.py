@@ -40,6 +40,7 @@ class Config:
 
     # Search
     DEFAULT_TOP_K = 5
+    DEFAULT_MIN_CONFIDENCE = 0.6  # 60% minimum confidence for displaying results
     HNSW_M = 32
     HNSW_EF_CONSTRUCTION = 200
     HNSW_EF_SEARCH = 50

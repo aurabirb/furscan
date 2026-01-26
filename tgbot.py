@@ -68,14 +68,25 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Format response
+        # Format response, filtering by minimum confidence
+        min_confidence = Config.DEFAULT_MIN_CONFIDENCE
         lines = []
         for i, result in enumerate(results, 1):
+            filtered_matches = [m for m in result.matches if m.confidence >= min_confidence]
+            if not filtered_matches:
+                continue
             lines.append(f"Characters at segment {i}:")
-            for n, m in enumerate(result.matches):
+            for n, m in enumerate(filtered_matches):
                 name = m.character_name or "Unknown"
                 confidence = m.confidence * 100
                 lines.append(f"{n+1}. {name} ({confidence:.1f}%)")
+
+        if not lines:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"No matches found above {min_confidence:.0%} confidence."
+            )
+            return
 
         msg = "\n".join(lines)
         print(msg)

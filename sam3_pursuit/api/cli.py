@@ -52,6 +52,8 @@ Examples:
     identify_parser = subparsers.add_parser("identify", help="Identify character in an image")
     identify_parser.add_argument("image", help="Path to image file")
     identify_parser.add_argument("--top-k", "-k", type=int, default=5, help="Number of results")
+    identify_parser.add_argument("--min-confidence", "-m", type=float, default=Config.DEFAULT_MIN_CONFIDENCE,
+                                 help=f"Minimum confidence threshold (default: {Config.DEFAULT_MIN_CONFIDENCE:.0%})")
     identify_parser.add_argument("--save-crops", action="store_true", help="Save preprocessed crops for debugging")
 
     add_parser = subparsers.add_parser("add", help="Add images for a character")
@@ -156,6 +158,8 @@ def identify_command(args):
         print("No matches found.")
         return
 
+    min_confidence = args.min_confidence
+
     print(f"\nAnalyzed {len(results)} segment(s) in {image_path.name}")
     print("=" * 60)
 
@@ -165,11 +169,14 @@ def identify_command(args):
         print(f"  Detection confidence: {seg_result.segment_confidence:.2%}")
         print("-" * 60)
 
-        if not seg_result.matches:
-            print("  No matches found for this segment.")
+        # Filter matches below threshold
+        filtered_matches = [m for m in seg_result.matches if m.confidence >= min_confidence]
+
+        if not filtered_matches:
+            print(f"  No matches found above {min_confidence:.0%} confidence.")
         else:
-            print(f"  Top {len(seg_result.matches)} matches:")
-            for i, match in enumerate(seg_result.matches, 1):
+            print(f"  Top {len(filtered_matches)} matches (>= {min_confidence:.0%}):")
+            for i, match in enumerate(filtered_matches, 1):
                 print(f"  {i}. {match.character_name or 'Unknown'}")
                 print(f"     Confidence: {match.confidence:.2%}")
                 print(f"     Distance: {match.distance:.4f}")
