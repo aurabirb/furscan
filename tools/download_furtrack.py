@@ -32,7 +32,20 @@ def get_url(url: str) -> requests.Response:
     return requests.get(
         url,
         headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "accept": "application/json, text/plain, */*",
+            "accept-language": "en,ru-RU;q=0.9,ru;q=0.8,nl;q=0.7",
+            "cache-control": "no-cache",
+            "origin": "https://www.furtrack.com",
+            "pragma": "no-cache",
+            "priority": "u=1, i",
+            "referer": "https://www.furtrack.com/",
+            "sec-ch-ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Linux"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-site",
+            "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
         },
         timeout=30,
     )
