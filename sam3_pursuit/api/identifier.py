@@ -194,16 +194,34 @@ class SAM3FursuitIdentifier:
         num_workers: int,
     ) -> int:
         """Add images with segmentation (parallel loading, sequential processing)."""
+        from sam3_pursuit.storage.database import get_git_version
+
         added_count = 0
         preprocessing_info = self._build_preprocessing_info()
-        total = len(image_paths)
+        git_version = get_git_version()
+
+        # Filter out images already processed with current git version
+        post_ids = [self._extract_post_id(p) for p in image_paths]
+        posts_to_process = self.db.get_posts_needing_update(post_ids, git_version)
+
+        # Build filtered lists
+        filtered_indices = [i for i, pid in enumerate(post_ids) if pid in posts_to_process]
+        if not filtered_indices:
+            print("All images already processed with current git version")
+            return 0
+
+        skipped = len(image_paths) - len(filtered_indices)
+        if skipped > 0:
+            print(f"Skipping {skipped} images already processed with git version {git_version}")
+
+        total = len(filtered_indices)
 
         # Process in chunks to limit memory usage
         chunk_size = num_workers * 2
 
         for chunk_start in range(0, total, chunk_size):
             chunk_end = min(chunk_start + chunk_size, total)
-            chunk_indices = range(chunk_start, chunk_end)
+            chunk_indices = filtered_indices[chunk_start:chunk_end]
 
             # Parallel load images in this chunk
             loaded = {}
@@ -263,13 +281,31 @@ class SAM3FursuitIdentifier:
         num_workers: int,
     ) -> int:
         """Add images without segmentation (batched embedding)."""
+        from sam3_pursuit.storage.database import get_git_version
+
         added_count = 0
         preprocessing_info = self._build_preprocessing_info()
-        total = len(image_paths)
+        git_version = get_git_version()
+
+        # Filter out images already processed with current git version
+        post_ids = [self._extract_post_id(p) for p in image_paths]
+        posts_to_process = self.db.get_posts_needing_update(post_ids, git_version)
+
+        # Build filtered list of indices
+        filtered_indices = [i for i, pid in enumerate(post_ids) if pid in posts_to_process]
+        if not filtered_indices:
+            print("All images already processed with current git version")
+            return 0
+
+        skipped = len(image_paths) - len(filtered_indices)
+        if skipped > 0:
+            print(f"Skipping {skipped} images already processed with git version {git_version}")
+
+        total = len(filtered_indices)
 
         for batch_start in range(0, total, batch_size):
             batch_end = min(batch_start + batch_size, total)
-            batch_indices = list(range(batch_start, batch_end))
+            batch_indices = filtered_indices[batch_start:batch_end]
 
             # Parallel load images
             loaded = {}

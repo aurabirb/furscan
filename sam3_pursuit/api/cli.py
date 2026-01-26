@@ -319,6 +319,8 @@ def show_command(args):
                 print(f"  Concept: {d.segmentation_concept}")
             if d.preprocessing_info:
                 print(f"  Preprocessing: {d.preprocessing_info}")
+            if d.git_version:
+                print(f"  Git version: {d.git_version}")
             if d.crop_path:
                 print(f"  Crop: {d.crop_path}")
             if d.created_at:
@@ -505,6 +507,11 @@ def stats_command(args):
             print("\nPreprocessing configs:")
             for config, count in stats['preprocessing_breakdown'].items():
                 print(f"  {config}: {count}")
+
+        if stats.get('git_version_breakdown'):
+            print("\nGit versions:")
+            for version, count in stats['git_version_breakdown'].items():
+                print(f"  {version or 'unknown'}: {count}")
 
         if stats['top_characters']:
             print("\nTop characters:")

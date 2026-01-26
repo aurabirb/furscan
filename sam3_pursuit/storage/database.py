@@ -1,11 +1,31 @@
 """SQLite storage for fursuit detection metadata."""
 
 import sqlite3
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from typing import Optional
 
 from sam3_pursuit.config import Config
+
+
+@lru_cache(maxsize=1)
+def get_git_version() -> str:
+    """Get short git commit hash, cached for the session."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=Config.BASE_DIR,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
 
 
 @dataclass
@@ -27,6 +47,7 @@ class Detection:
     segmentation_concept: Optional[str] = None
     preprocessing_info: Optional[str] = None
     crop_path: Optional[str] = None
+    git_version: Optional[str] = None
 
 
 class Database:
@@ -36,7 +57,7 @@ class Database:
         id, post_id, character_name, embedding_id, bbox_x, bbox_y,
         bbox_width, bbox_height, confidence, segmentor_model, created_at,
         source_filename, source_url, is_cropped, segmentation_concept,
-        preprocessing_info, crop_path
+        preprocessing_info, crop_path, git_version
     """
 
     def __init__(self, db_path: str = Config.DB_PATH):
@@ -84,6 +105,7 @@ class Database:
             ("segmentation_concept", "TEXT"),
             ("preprocessing_info", "TEXT"),
             ("crop_path", "TEXT"),
+            ("git_version", "TEXT"),
         ]
 
         for col_name, col_type in new_columns:
@@ -101,8 +123,8 @@ class Database:
             INSERT INTO detections
             (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height,
              confidence, segmentor_model, source_filename, source_url, is_cropped,
-             segmentation_concept, preprocessing_info, crop_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             segmentation_concept, preprocessing_info, crop_path, git_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             detection.post_id,
             detection.character_name,
@@ -118,7 +140,8 @@ class Database:
             1 if detection.is_cropped else 0,
             detection.segmentation_concept,
             detection.preprocessing_info,
-            detection.crop_path
+            detection.crop_path,
+            detection.git_version or get_git_version(),
         ))
 
         row_id = c.lastrowid
@@ -145,6 +168,7 @@ class Database:
             segmentation_concept=row[14] if len(row) > 14 else None,
             preprocessing_info=row[15] if len(row) > 15 else None,
             crop_path=row[16] if len(row) > 16 else None,
+            git_version=row[17] if len(row) > 17 else None,
         )
 
     def get_detection_by_embedding_id(self, embedding_id: int) -> Optional[Detection]:
@@ -212,6 +236,12 @@ class Database:
         """)
         preprocessing_breakdown = dict(c.fetchall())
 
+        c.execute("""
+            SELECT git_version, COUNT(*) as count FROM detections
+            GROUP BY git_version ORDER BY count DESC LIMIT 10
+        """)
+        git_version_breakdown = dict(c.fetchall())
+
         conn.close()
 
         return {
@@ -220,7 +250,8 @@ class Database:
             "unique_posts": unique_posts,
             "top_characters": top_chars,
             "segmentor_breakdown": segmentor_breakdown,
-            "preprocessing_breakdown": preprocessing_breakdown
+            "preprocessing_breakdown": preprocessing_breakdown,
+            "git_version_breakdown": git_version_breakdown,
         }
 
     def has_post(self, post_id: str) -> bool:
@@ -230,6 +261,42 @@ class Database:
         exists = c.fetchone() is not None
         conn.close()
         return exists
+
+    def has_post_with_version(self, post_id: str, git_version: Optional[str] = None) -> bool:
+        """Check if post exists with the specified git version (or current if not specified)."""
+        if git_version is None:
+            git_version = get_git_version()
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute(
+            "SELECT 1 FROM detections WHERE post_id = ? AND git_version = ? LIMIT 1",
+            (post_id, git_version)
+        )
+        exists = c.fetchone() is not None
+        conn.close()
+        return exists
+
+    def get_posts_needing_update(self, post_ids: list[str], git_version: Optional[str] = None) -> set[str]:
+        """Return post_ids that don't exist or have a different git version."""
+        if git_version is None:
+            git_version = get_git_version()
+        if not post_ids:
+            return set()
+
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+
+        # Find posts that exist with current version
+        placeholders = ",".join("?" * len(post_ids))
+        c.execute(
+            f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND git_version = ?",
+            (*post_ids, git_version)
+        )
+        existing = {row[0] for row in c.fetchall()}
+        conn.close()
+
+        # Return posts that need processing
+        return set(post_ids) - existing
 
     def get_next_embedding_id(self) -> int:
         conn = sqlite3.connect(self.db_path)
