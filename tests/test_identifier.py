@@ -186,7 +186,7 @@ class TestIdentification(unittest.TestCase):
 
         # Load identifier once for all tests
         from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
-        cls.identifier = SAM3FursuitIdentifier()
+        cls.identifier = SAM3FursuitIdentifier(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
 
     def setUp(self):
         """Skip test if database not available."""
