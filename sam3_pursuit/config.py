@@ -27,7 +27,7 @@ class Config:
     # Detection
     DETECTION_CONFIDENCE = 0.5
     MAX_DETECTIONS = 10
-    DEFAULT_CONCEPT = "fursuiter"
+    DEFAULT_CONCEPT = "fursuiter head"
 
     # Background isolation
     DEFAULT_BACKGROUND_MODE = "solid"
