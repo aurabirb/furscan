@@ -48,6 +48,7 @@ class FursuitSegmentor:
             mode="predict",
             model=model_path,
             device=self.device,
+            imgsz=644,  # Must be multiple of stride 14 (644 = 14 * 46)
             verbose=False,
         )
         predictor = SAM3SemanticPredictor(overrides=overrides)
