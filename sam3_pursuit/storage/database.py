@@ -326,3 +326,19 @@ class Database:
         c.execute("SELECT MAX(embedding_id) FROM detections")
         result = c.fetchone()[0]
         return 0 if result is None else result + 1
+
+    @retry_on_locked()
+    def delete_orphaned_detections(self, max_valid_embedding_id: int) -> int:
+        """Delete detections with embedding_id > max_valid_embedding_id.
+
+        Returns the number of deleted rows.
+        """
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute(
+            "DELETE FROM detections WHERE embedding_id > ?",
+            (max_valid_embedding_id,)
+        )
+        deleted = c.rowcount
+        conn.commit()
+        return deleted

@@ -47,12 +47,29 @@ class SAM3FursuitIdentifier:
         self.device = device or Config.get_device()
         self.db = Database(db_path)
         self.index = VectorIndex(index_path)
+        self._sync_index_and_db()
         self.pipeline = ProcessingPipeline(
             device=self.device,
             isolation_config=isolation_config,
             segmentor_model_name=segmentor_model_name,
             segmentor_concept=segmentor_concept
         )
+
+    def _sync_index_and_db(self):
+        """Ensure FAISS index and database are in sync.
+
+        If the database has detections with embedding_ids beyond what FAISS has,
+        those detections are orphaned (their embeddings were lost due to a crash
+        before FAISS was saved). Delete them to prevent unique constraint errors.
+        """
+        max_valid_id = self.index.size - 1  # FAISS IDs are 0-indexed
+        next_db_id = self.db.get_next_embedding_id()
+        max_db_id = next_db_id - 1
+
+        if max_db_id > max_valid_id:
+            deleted = self.db.delete_orphaned_detections(max_valid_id)
+            if deleted > 0:
+                print(f"Sync: deleted {deleted} orphaned detections (embedding_id > {max_valid_id})")
 
     def _short_embedder_name(self) -> str:
         emb = self.pipeline.embedder_model_name
@@ -167,7 +184,7 @@ class SAM3FursuitIdentifier:
             return 0
 
         total = len(filtered_indices)
-        save_interval = 50
+        save_interval = 500
 
         for i, idx in enumerate(filtered_indices):
             character_name = character_names[idx]
