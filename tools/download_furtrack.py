@@ -24,6 +24,10 @@ MAX_IMAGES_PER_CHAR = 2
 CACHE_DB = "furtrack_cache.db"
 IMAGES_DIR = "furtrack_images"
 MAX_CONCURRENT_DOWNLOADS = 20
+BACKUP_INTERVAL = 1000  # Backup database every N characters
+
+# Global connection for reduced disk writes
+_conn: sqlite3.Connection | None = None
 
 HEADERS = {
     "accept": "application/json, text/plain, */*",
@@ -43,15 +47,36 @@ HEADERS = {
 
 
 def get_cache_db() -> sqlite3.Connection:
-    """Get connection to cache database, creating table if needed."""
-    conn = sqlite3.connect(CACHE_DB)
-    conn.execute("""
+    """Get persistent connection to cache database.
+
+    Uses journal_mode=OFF to avoid journal file recreation on every write.
+    Safe for single-threaded use only.
+    """
+    global _conn
+    if _conn is not None:
+        return _conn
+
+    _conn = sqlite3.connect(CACHE_DB)
+    _conn.execute("PRAGMA journal_mode=OFF")  # No journal file - single thread only
+    _conn.execute("PRAGMA synchronous=OFF")   # Faster writes, backup handles durability
+    _conn.execute("""
         CREATE TABLE IF NOT EXISTS cache (
             url TEXT PRIMARY KEY,
             data TEXT NOT NULL
         )
     """)
-    return conn
+    return _conn
+
+
+def backup_cache_db():
+    """Create a backup copy of the cache database."""
+    import shutil
+    backup_path = f"{CACHE_DB}.backup"
+    if _conn:
+        _conn.commit()  # Ensure all data is written
+    if Path(CACHE_DB).exists():
+        shutil.copy2(CACHE_DB, backup_path)
+        print(f"  [Backup created: {backup_path}]")
 
 
 def get_json_cached(url: str) -> dict | None:
@@ -61,7 +86,6 @@ def get_json_cached(url: str) -> dict | None:
     # Check cache
     row = conn.execute("SELECT data FROM cache WHERE url = ?", (url,)).fetchone()
     if row:
-        conn.close()
         return json.loads(row[0])
 
     # Fetch from network
@@ -71,13 +95,11 @@ def get_json_cached(url: str) -> dict | None:
         data = r.json()
     except Exception as e:
         print(f"Error fetching {url}: {e}")
-        conn.close()
         return None
 
     # Store as plain JSON
     conn.execute("INSERT OR REPLACE INTO cache (url, data) VALUES (?, ?)", (url, json.dumps(data)))
     conn.commit()
-    conn.close()
     return data
 
 
@@ -230,6 +252,7 @@ def download_all_characters(max_images: int = MAX_IMAGES_PER_CHAR):
     characters.sort(key=lambda c: c[1], reverse=True)
 
     total = 0
+    processed = 0
     for i, (char, count) in enumerate(characters):
         safe_name = sanitize_folder_name(char)
         char_folder = Path(IMAGES_DIR) / safe_name
@@ -241,7 +264,14 @@ def download_all_characters(max_images: int = MAX_IMAGES_PER_CHAR):
         print(f"[{i+1}/{len(characters)}] {char} ({existing}/{max_images} existing)")
         downloaded = download_character(char, max_images)
         total += downloaded
+        processed += 1
 
+        # Periodic backup
+        if processed % BACKUP_INTERVAL == 0:
+            backup_cache_db()
+
+    # Final backup
+    backup_cache_db()
     print(f"\nTotal downloaded: {total}")
 
 

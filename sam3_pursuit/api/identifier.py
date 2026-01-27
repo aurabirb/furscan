@@ -54,31 +54,36 @@ class SAM3FursuitIdentifier:
             segmentor_concept=segmentor_concept
         )
 
-    def _build_preprocessing_info(self) -> str:
-        parts = []
-        seg = self.pipeline.segmentor_model_name or ""
-        parts.append(f"seg:{seg}")
-        if seg:
-            iso = self.pipeline.isolation_config
-            mode_map = {"solid": "s", "blur": "b", "none": "n"}
-            parts.append(f"bg:{mode_map.get(iso.mode, 'n')}")
-            if iso.mode == "solid":
-                r, g, b = iso.background_color
-                parts.append(f"bgc:{r:02x}{g:02x}{b:02x}")
-            if iso.mode == "blur":
-                parts.append(f"br:{iso.blur_radius}")
+    def _short_embedder_name(self) -> str:
         emb = self.pipeline.embedder_model_name
         if "dinov2-base" in emb:
-            emb = "dv2b"
+            return "dv2b"
         elif "dinov2-large" in emb:
-            emb = "dv2l"
+            return "dv2l"
         elif "dinov2-giant" in emb:
-            emb = "dv2g"
-        else:
-            emb = emb.split("/")[-1][:8]
-        parts.append(f"emb:{emb}")
-        parts.append(f"idx:{self.index.index_type}")
+            return "dv2g"
+        return emb.split("/")[-1][:8]
+
+    def _build_preprocessing_info(self) -> str:
+        """Build fingerprint for segmented crops."""
+        parts = ["v2", f"seg:{self.pipeline.segmentor_model_name}"]
+        concept = (self.pipeline.segmentor_concept or "").replace('|', '.')
+        parts.append(f"con:{concept}")
+        iso = self.pipeline.isolation_config
+        mode_map = {"solid": "s", "blur": "b", "none": "n"}
+        parts.append(f"bg:{mode_map.get(iso.mode, 'n')}")
+        if iso.mode == "solid":
+            r, g, b = iso.background_color
+            parts.append(f"bgc:{r:02x}{g:02x}{b:02x}")
+        elif iso.mode == "blur":
+            parts.append(f"br:{iso.blur_radius}")
+        parts.append(f"emb:{self._short_embedder_name()}")
+        parts.append(f"tsz:{Config.TARGET_IMAGE_SIZE}")
         return "|".join(parts)
+
+    def _build_full_preprocessing_info(self) -> str:
+        """Build fingerprint for full image (no segmentation)."""
+        return f"v2|seg:full|emb:{self._short_embedder_name()}|tsz:{Config.TARGET_IMAGE_SIZE}"
 
     def identify(
         self,
@@ -145,21 +150,24 @@ class SAM3FursuitIdentifier:
     ) -> int:
         assert len(character_names) == len(image_paths)
 
-        from sam3_pursuit.storage.database import get_git_version
-
         added_count = 0
-        preprocessing_info = self._build_preprocessing_info()
-        git_version = get_git_version()
+        full_preproc = self._build_full_preprocessing_info() if add_full_image else None
+        seg_preproc = self._build_preprocessing_info()
 
         post_ids = [self._extract_post_id(p) for p in image_paths]
-        posts_to_process = self.db.get_posts_needing_update(post_ids, git_version, preprocessing_info)
-        print(f"Processing {len(posts_to_process)} new/updated posts out of {len(post_ids)} total")
+
+        # Check which posts need processing for each preprocessing type
+        posts_need_full = self.db.get_posts_needing_update(post_ids, full_preproc) if add_full_image else set()
+        posts_need_seg = self.db.get_posts_needing_update(post_ids, seg_preproc)
+        posts_to_process = posts_need_full | posts_need_seg
+
+        print(f"Processing {len(posts_to_process)} posts ({len(posts_need_full)} need full, {len(posts_need_seg)} need seg)")
         filtered_indices = [i for i, pid in enumerate(post_ids) if pid in posts_to_process]
         if not filtered_indices:
             return 0
 
         total = len(filtered_indices)
-        save_interval = 50  # Save index every N images
+        save_interval = 50
 
         for i, idx in enumerate(filtered_indices):
             character_name = character_names[idx]
@@ -167,7 +175,6 @@ class SAM3FursuitIdentifier:
             post_id = self._extract_post_id(img_path)
             filename = os.path.basename(img_path)
 
-            # Load image
             try:
                 image = self._load_image(img_path)
             except Exception as e:
@@ -176,8 +183,7 @@ class SAM3FursuitIdentifier:
 
             w, h = image.size
 
-            # Add full image embedding (no segmentation/isolation)
-            if add_full_image:
+            if add_full_image and post_id in posts_need_full:
                 resized_full = self.pipeline._resize_to_patch_multiple(image)
                 full_embedding = self.pipeline.embed_only(resized_full)
                 self._add_single_embedding(
@@ -191,46 +197,42 @@ class SAM3FursuitIdentifier:
                     source_url=source_url,
                     is_cropped=False,
                     segmentation_concept=None,
-                    preprocessing_info=preprocessing_info,
+                    preprocessing_info=full_preproc,
                 )
                 added_count += 1
 
-            # Process: segment -> isolate -> embed
-            proc_results = self.pipeline.process(image)
+            if post_id in posts_need_seg:
+                proc_results = self.pipeline.process(image)
+                for j, proc_result in enumerate(proc_results):
+                    if save_crops and proc_result.isolated_crop:
+                        self._save_debug_crop(proc_result.isolated_crop, f"{post_id}_seg_{j}", search=False)
+                    self._add_single_embedding(
+                        embedding=proc_result.embedding,
+                        post_id=post_id,
+                        character_name=character_name,
+                        bbox=proc_result.segmentation.bbox,
+                        confidence=proc_result.segmentation.confidence,
+                        segmentor_model=proc_result.segmentor_model,
+                        source_filename=filename,
+                        source_url=source_url,
+                        is_cropped=True,
+                        segmentation_concept=proc_result.segmentor_concept,
+                        preprocessing_info=seg_preproc,
+                    )
+                    added_count += 1
 
-            if not proc_results:
-                print(f"[{i+1}/{total}] {character_name}: no segments found (full image added)")
-                continue
+                segment_count = len(proc_results)
+                full_msg = "+full" if (add_full_image and post_id in posts_need_full) else ""
+                print(f"[{i+1}/{total}] {character_name}: {segment_count} segments{full_msg}")
+            else:
+                print(f"[{i+1}/{total}] {character_name}: full only")
 
-            for proc_result in proc_results:
-                if save_crops and proc_result.isolated_crop:
-                    self._save_debug_crop(proc_result.isolated_crop, f"{post_id}_seg_{proc_results.index(proc_result)}", search=False)
-                self._add_single_embedding(
-                    embedding=proc_result.embedding,
-                    post_id=post_id,
-                    character_name=character_name,
-                    bbox=proc_result.segmentation.bbox,
-                    confidence=proc_result.segmentation.confidence,
-                    segmentor_model=proc_result.segmentor_model,
-                    source_filename=filename,
-                    source_url=source_url,
-                    is_cropped=True,
-                    segmentation_concept=proc_result.segmentor_concept,
-                    preprocessing_info=preprocessing_info,
-                )
-                added_count += 1
-
-            segment_count = len(proc_results)
-            full_msg = "+full" if add_full_image else ""
-            print(f"[{i+1}/{total}] {character_name}: {segment_count} segments{full_msg}, {added_count} total")
-
-            # Periodically save index with backup
             if (i + 1) % save_interval == 0:
                 self.index.save(backup=True)
                 print(f"  Index saved ({self.index.size} embeddings)")
 
         self.index.save(backup=True)
-        print(f"Final index saved ({self.index.size} embeddings)")
+        print(f"Final index saved ({self.index.size} embeddings), {added_count} added")
         return added_count
 
     def _add_single_embedding(

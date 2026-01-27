@@ -118,6 +118,7 @@ class Database:
         c.execute("CREATE INDEX IF NOT EXISTS idx_post_id ON detections(post_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_character_name ON detections(character_name)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_embedding_id ON detections(embedding_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_post_preproc ON detections(post_id, preprocessing_info)")
 
         # Add missing columns for existing databases
         c.execute("PRAGMA table_info(detections)")
@@ -288,41 +289,19 @@ class Database:
         conn.close()
         return exists
 
-    def has_post_with_version(self, post_id: str, git_version: Optional[str] = None) -> bool:
-        if git_version is None:
-            git_version = get_git_version()
-        conn = self._connect()
-        c = conn.cursor()
-        c.execute(
-            "SELECT 1 FROM detections WHERE post_id = ? AND git_version = ? LIMIT 1",
-            (post_id, git_version)
-        )
-        exists = c.fetchone() is not None
-        conn.close()
-        return exists
-
-    def get_posts_needing_update(
-        self, post_ids: list[str], git_version: Optional[str] = None, preprocessing_info: Optional[str] = None
-    ) -> set[str]:
-        if git_version is None:
-            git_version = get_git_version()
-        if not post_ids:
-            return set()
+    def get_posts_needing_update(self, post_ids: list[str], preprocessing_info: str) -> set[str]:
+        """Return post_ids that don't have an entry with this preprocessing_info."""
+        if not post_ids or not preprocessing_info:
+            return set(post_ids)
 
         conn = self._connect()
         c = conn.cursor()
 
         placeholders = ",".join("?" * len(post_ids))
-        if preprocessing_info:
-            c.execute(
-                f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND git_version = ? AND preprocessing_info = ?",
-                (*post_ids, git_version, preprocessing_info)
-            )
-        else:
-            c.execute(
-                f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND git_version = ?",
-                (*post_ids, git_version)
-            )
+        c.execute(
+            f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND preprocessing_info = ?",
+            (*post_ids, preprocessing_info)
+        )
         existing = {row[0] for row in c.fetchall()}
         conn.close()
 
