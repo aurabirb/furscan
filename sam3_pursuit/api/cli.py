@@ -298,6 +298,8 @@ def ingest_command(args):
 
 def ingest_from_directory(args):
     """Ingest images from directory structure: data_dir/character_name/*.jpg"""
+    from itertools import batched
+    batch_size = 100
     
     identifier = _get_identifier(args)
     data_dir = Path(args.data_dir)
@@ -307,27 +309,33 @@ def ingest_from_directory(args):
         sys.exit(1)
 
     total_added = 0
+    def get_images():
+        for char_dir in sorted(data_dir.iterdir()):
+            if not char_dir.is_dir():
+                continue
 
-    for char_dir in sorted(data_dir.iterdir()):
-        if not char_dir.is_dir():
-            continue
+            character_name = char_dir.name
+            images = list(char_dir.glob("*.jpg")) + list(char_dir.glob("*.png")) + list(char_dir.glob("*.jpeg"))
 
-        character_name = char_dir.name
-        images = list(char_dir.glob("*.jpg")) + list(char_dir.glob("*.png")) + list(char_dir.glob("*.jpeg"))
-
-        if args.limit:
-            images = images[:args.limit]
-
-        if images:
+            if args.limit:
+                images = images[:args.limit]
+            
             print(f"Ingesting {len(images)} images for {character_name}")
-            add_full_image = getattr(args, "add_full_image", True)
-            added = identifier.add_images(
-                character_names=[character_name] * len(images),
-                image_paths=[str(p) for p in images],
-                save_crops=args.save_crops,
-                add_full_image=add_full_image,
-            )
-            total_added += added
+            for img in images:
+                yield (character_name, img)
+
+    for batch in batched(get_images(), batch_size):
+        print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
+        names, images = zip(*batch)
+        # print(names, images)
+        add_full_image = getattr(args, "add_full_image", True)
+        added = identifier.add_images(
+            character_names=names,
+            image_paths=[str(p) for p in images],
+            save_crops=args.save_crops,
+            add_full_image=add_full_image,
+        )
+        total_added += added
 
     print(f"\nTotal: Added {total_added} images")
 

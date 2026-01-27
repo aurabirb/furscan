@@ -91,6 +91,7 @@ def get_json_cached(url: str) -> dict | None:
     # Fetch from network
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
+        print(f"HTTP {r.status_code}")
         r.raise_for_status()
         data = r.json()
     except Exception as e:
@@ -162,7 +163,7 @@ def get_post_metadata(post_id: int) -> dict | None:
 def sanitize_folder_name(name: str) -> str:
     """Sanitize character name for use as folder name."""
     # Replace problematic characters
-    return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("\0", "")
+    return name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("\0", "").replace("|", "_")
 
 
 def get_existing_images(char_folder: Path) -> set[str]:
@@ -237,6 +238,7 @@ def download_character(char: str, max_images: int = MAX_IMAGES_PER_CHAR) -> int:
             to_download.append(str(pid))
 
     if not to_download:
+        print(f"No downloads for {char}, existing: {len(existing)}")
         return 0
 
     print(f"Downloading {len(to_download)} images for {char}...")
