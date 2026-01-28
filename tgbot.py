@@ -17,11 +17,12 @@ from telegram.ext import (
     filters,
 )
 
+load_dotenv()
 # AI tool configuration (from environment variables with baked-in defaults)
 AITOOL_WORK_DIR = os.environ.get("AITOOL_WORK_DIR", os.path.abspath(os.path.join(os.path.dirname(__file__), "../../pursuit")))
 AITOOL_BINARY = os.environ.get("AITOOL_BINARY", "claude")
 AITOOL_ARGS = os.environ.get("AITOOL_ARGS", "--allowedTools 'Bash(git:*) Edit Write Read Glob Grep' -p")
-AITOOL_TIMEOUT = int(os.environ.get("AITOOL_TIMEOUT", "300"))  # 5 minutes default
+AITOOL_TIMEOUT = int(os.environ.get("AITOOL_TIMEOUT", "600"))  # 10 minutes default
 AITOOL_POST_COMMAND = os.environ.get(
     "AITOOL_POST_COMMAND",
     f"pkill -f 'python.*{AITOOL_WORK_DIR}.*tgbot.py' ; cd {AITOOL_WORK_DIR} && . .venv/bin/activate && nohup python tgbot.py > /dev/null 2>&1 &"
@@ -221,6 +222,7 @@ def is_user_authorized(update: Update) -> bool:
     # Check by user ID or username
     user_id_str = str(user.id)
     username = (user.username or "").lower()
+    print(f"username: {username} id: {user_id_str}")
 
     return user_id_str in allowed or username in allowed
 
@@ -287,6 +289,7 @@ async def aitool(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Start the process
+        print(f"Starting prompt: {cmd_parts}")
         process = await asyncio.create_subprocess_exec(
             *cmd_parts,
             stdout=asyncio.subprocess.PIPE,
@@ -387,6 +390,7 @@ async def aitool(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             try:
+                print(f"Running command: {AITOOL_POST_COMMAND}")
                 post_process = await asyncio.create_subprocess_shell(
                     AITOOL_POST_COMMAND,
                     stdout=asyncio.subprocess.PIPE,
@@ -439,7 +443,6 @@ async def aitool(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 if __name__ == "__main__":
-    load_dotenv()
     token = os.environ.get("TG_BOT_TOKEN", "")
 
     if not token:
