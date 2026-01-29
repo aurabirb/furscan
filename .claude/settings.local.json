@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.ultralytics.com)",
+      "WebSearch",
+      "Bash(source .venv/bin/activate)",
+      "Bash(python:*)",
+      "Bash(fuser:*)",
+      "Bash(ls:*)"
+    ]
+  }
+}
