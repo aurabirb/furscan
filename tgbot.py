@@ -4,8 +4,10 @@ import asyncio
 import os
 import re
 import sys
+from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from aiohttp import web
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 from telegram import Update
@@ -18,6 +20,12 @@ from telegram.ext import (
 )
 
 load_dotenv()
+
+# Web server configuration
+WEB_HOST = os.environ.get("WEB_HOST", "0.0.0.0")
+WEB_PORT = int(os.environ.get("WEB_PORT", "8080"))
+STATIC_DIR = Path(__file__).parent / "static"
+
 # AI tool configuration (from environment variables with baked-in defaults)
 AITOOL_WORK_DIR = os.environ.get("AITOOL_WORK_DIR", os.path.abspath(os.path.join(os.path.dirname(__file__), "../../pursuit")))
 AITOOL_BINARY = os.environ.get("AITOOL_BINARY", "claude")
@@ -606,13 +614,42 @@ async def commit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-if __name__ == "__main__":
+# Web server setup
+async def web_index_handler(request: web.Request) -> web.FileResponse:
+    """Serve index.html for the root path."""
+    return web.FileResponse(STATIC_DIR / "index.html")
+
+
+def create_web_app() -> web.Application:
+    """Create and configure the aiohttp web application."""
+    app = web.Application()
+    app.router.add_get("/", web_index_handler)
+    app.router.add_static("/static/", STATIC_DIR, name="static")
+    return app
+
+
+async def run_web_server(runner: web.AppRunner):
+    """Run the web server."""
+    await runner.setup()
+    site = web.TCPSite(runner, WEB_HOST, WEB_PORT)
+    await site.start()
+    print(f"Web server running at http://{WEB_HOST}:{WEB_PORT}")
+
+
+async def run_bot_and_web():
+    """Run both the Telegram bot and web server concurrently."""
     token = os.environ.get("TG_BOT_TOKEN", "")
 
     if not token:
         print("Error: TG_BOT_TOKEN not set in environment", file=sys.stderr)
         sys.exit(1)
 
+    # Ensure static directory exists
+    if not STATIC_DIR.exists():
+        STATIC_DIR.mkdir(parents=True)
+        print(f"Created static directory: {STATIC_DIR}")
+
+    # Create Telegram application
     application = ApplicationBuilder().token(token).build()
 
     # Add handlers
@@ -623,9 +660,39 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("restart", restart))
     application.add_handler(CommandHandler("commit", commit))
 
-    print("Bot running...")
+    # Create web app
+    web_app = create_web_app()
+    web_runner = web.AppRunner(web_app)
+
+    print("Starting bot and web server...")
     print(f"AI tool config: binary={AITOOL_BINARY}, timeout={AITOOL_TIMEOUT}s")
     print(f"  args: {AITOOL_ARGS}")
     print(f"  work_dir: {AITOOL_WORK_DIR}")
     print(f"  allowed_users: {AITOOL_ALLOWED_USERS or '(none - /aitool disabled)'}")
-    application.run_polling()
+
+    # Initialize and start web server
+    await run_web_server(web_runner)
+
+    # Initialize and start Telegram bot
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+
+    print("Bot running...")
+
+    # Keep running until interrupted
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        # Cleanup
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+        await web_runner.cleanup()
+
+
+if __name__ == "__main__":
+    asyncio.run(run_bot_and_web())
