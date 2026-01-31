@@ -5,10 +5,10 @@ Fursuit character recognition system using SAM3 + DINOv2. Identifies fursuit cha
 ## How It Works
 
 ```
-Image → SAM3 (detect "fursuiter") → Background Isolation → DINOv2 (768D embedding) → FAISS (similarity search) → Results
+Image → SAM3 (detect "fursuiter head") → Background Isolation → DINOv2 (768D embedding) → FAISS (similarity search) → Results
 ```
 
-1. **SAM3** segments all fursuiters in the image using the text prompt `"fursuiter"`
+1. **SAM3** segments all fursuiters in the image using the text prompt `"fursuiter head"`
 2. **Background Isolation** replaces the background with a solid color or blur to reduce noise
 3. **DINOv2** generates a 768-dimensional embedding for each isolated fursuiter crop
 4. **FAISS** finds the most similar embeddings in the database
@@ -205,6 +205,27 @@ mask = np.ones((crop.height, crop.width), dtype=np.uint8)  # Binary mask
 isolated = isolator.isolate(crop, mask)
 ```
 
+### Using mask storage
+
+```python
+from sam3_pursuit.storage.mask_storage import MaskStorage
+import numpy as np
+
+# Initialize mask storage (uses default pursuit_masks/ directory)
+mask_storage = MaskStorage()
+
+# Save a segmentation mask
+mask = np.random.randint(0, 2, (100, 100), dtype=np.uint8)
+mask_path = mask_storage.save_mask(mask, "character_001", search=False)
+print(f"Mask saved to: {mask_path}")
+
+# Load a mask back
+loaded_mask = mask_storage.load_mask(mask_path)
+
+# Check if a mask exists
+exists = mask_storage.mask_exists("character_001", search=False)
+```
+
 ## Building a Database
 
 ### Option 1: Add images manually
@@ -270,7 +291,8 @@ pursuit/
 │   │   └── processor.py    # Segmentation + isolation + embedding pipeline
 │   ├── storage/
 │   │   ├── database.py     # SQLite metadata storage
-│   │   └── vector_index.py # FAISS vector index
+│   │   ├── vector_index.py # FAISS vector index
+│   │   └── mask_storage.py # Segmentation mask storage
 │   └── config.py           # Configuration
 ├── tools/                  # Data collection & debugging
 │   ├── download_furtrack.py    # FurTrack image downloader
@@ -292,6 +314,7 @@ pursuit/
 | `pursuit.db` | SQLite database with detection metadata (default) |
 | `pursuit.index` | FAISS index with embeddings (default) |
 | `pursuit_crops/` | Saved crop images for debugging (when using `--save-crops`) |
+| `pursuit_masks/` | Saved segmentation masks (when using `--save-crops`) |
 
 These files are gitignored. Use `--db` and `--index` flags to use custom paths.
 
@@ -303,6 +326,7 @@ Key settings in `sam3_pursuit/config.py`:
 # File paths
 DEFAULT_DB_NAME = "pursuit.db"         # Default database file
 DEFAULT_INDEX_NAME = "pursuit.index"   # Default index file
+DEFAULT_MASKS_DIR = "pursuit_masks"    # Segmentation masks directory
 
 # Models
 SAM3_MODEL = "sam3"                    # Model name
@@ -310,7 +334,7 @@ DINOV2_MODEL = "facebook/dinov2-base"  # Embedding model
 EMBEDDING_DIM = 768                    # DINOv2 output dimension
 
 # Detection
-DEFAULT_CONCEPT = "fursuiter"          # SAM3 text prompt
+DEFAULT_CONCEPT = "fursuiter head"     # SAM3 text prompt
 DETECTION_CONFIDENCE = 0.5             # Minimum confidence threshold
 MAX_DETECTIONS = 10                    # Max segments per image
 

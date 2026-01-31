@@ -14,8 +14,8 @@ class MaskStorage:
 
     def __init__(self, base_dir: Optional[str] = None):
         self.base_dir = Path(base_dir) if base_dir else Path(Config.MASKS_DIR)
-        self.ingest_dir = self.base_dir / "ingest"
-        self.search_dir = self.base_dir / "search"
+        self.ingest_dir = Path(Config.MASKS_INGEST_DIR)
+        self.search_dir = Path(Config.MASKS_SEARCH_DIR)
 
     def save_mask(
         self,

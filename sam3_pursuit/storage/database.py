@@ -65,6 +65,7 @@ class Detection:
     segmentation_concept: Optional[str] = None
     preprocessing_info: Optional[str] = None
     crop_path: Optional[str] = None
+    mask_path: Optional[str] = None
     git_version: Optional[str] = None
 
 
@@ -73,7 +74,7 @@ class Database:
         id, post_id, character_name, embedding_id, bbox_x, bbox_y,
         bbox_width, bbox_height, confidence, segmentor_model, created_at,
         source_filename, source_url, is_cropped, segmentation_concept,
-        preprocessing_info, crop_path, git_version
+        preprocessing_info, crop_path, mask_path, git_version
     """
     _TIMEOUT = 10.0
     _BUSY_TIMEOUT_MS = 15000
@@ -116,7 +117,8 @@ class Database:
                 is_cropped INTEGER DEFAULT 0,
                 segmentation_concept TEXT,
                 preprocessing_info TEXT,
-                crop_path TEXT
+                crop_path TEXT,
+                mask_path TEXT
             )
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_post_id ON detections(post_id)")
@@ -133,6 +135,7 @@ class Database:
             ("segmentation_concept", "TEXT"),
             ("preprocessing_info", "TEXT"),
             ("crop_path", "TEXT"),
+            ("mask_path", "TEXT"),
             ("git_version", "TEXT"),
         ]
         for col_name, col_type in new_columns:
@@ -144,8 +147,8 @@ class Database:
         INSERT INTO detections
         (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height,
          confidence, segmentor_model, source_filename, source_url, is_cropped,
-         segmentation_concept, preprocessing_info, crop_path, git_version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         segmentation_concept, preprocessing_info, crop_path, mask_path, git_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     def _detection_to_tuple(self, d: Detection) -> tuple:
@@ -154,7 +157,8 @@ class Database:
             d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
             d.confidence, d.segmentor_model, d.source_filename, d.source_url,
             1 if d.is_cropped else 0, d.segmentation_concept,
-            d.preprocessing_info, d.crop_path, d.git_version or get_git_version(),
+            d.preprocessing_info, d.crop_path, d.mask_path,
+            d.git_version or get_git_version(),
         )
 
     @retry_on_locked()
@@ -193,7 +197,8 @@ class Database:
             segmentation_concept=row[14] if len(row) > 14 else None,
             preprocessing_info=row[15] if len(row) > 15 else None,
             crop_path=row[16] if len(row) > 16 else None,
-            git_version=row[17] if len(row) > 17 else None,
+            mask_path=row[17] if len(row) > 17 else None,
+            git_version=row[18] if len(row) > 18 else None,
         )
 
     @retry_on_locked()

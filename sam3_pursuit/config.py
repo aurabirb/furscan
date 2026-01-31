@@ -11,12 +11,16 @@ class Config:
     DEFAULT_DB_NAME = "pursuit.db"
     DEFAULT_INDEX_NAME = "pursuit.index"
     DEFAULT_CROPS_DIR = "pursuit_crops"
+    DEFAULT_MASKS_DIR = "pursuit_masks"
 
     DB_PATH = os.path.join(BASE_DIR, DEFAULT_DB_NAME)
     INDEX_PATH = os.path.join(BASE_DIR, DEFAULT_INDEX_NAME)
     CROPS_DIR = os.path.join(BASE_DIR, DEFAULT_CROPS_DIR)
     CROPS_INGEST_DIR = os.path.join(BASE_DIR, DEFAULT_CROPS_DIR, "ingest")
     CROPS_SEARCH_DIR = os.path.join(BASE_DIR, DEFAULT_CROPS_DIR, "search")
+    MASKS_DIR = os.path.join(BASE_DIR, DEFAULT_MASKS_DIR)
+    MASKS_INGEST_DIR = os.path.join(BASE_DIR, DEFAULT_MASKS_DIR, "ingest")
+    MASKS_SEARCH_DIR = os.path.join(BASE_DIR, DEFAULT_MASKS_DIR, "search")
     IMAGES_DIR = os.path.join(BASE_DIR, "furtrack_images")
 
     # Models
