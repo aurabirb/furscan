@@ -131,7 +131,12 @@ pursuit stats --json
 ### Run Telegram bot
 
 ```bash
+# Single bot
 export TG_BOT_TOKEN="your_bot_token"
+python tgbot.py
+
+# Multiple bots (comma-separated tokens, shared database)
+export TG_BOT_TOKENS="token1,token2,token3"
 python tgbot.py
 ```
 
@@ -352,7 +357,8 @@ TARGET_IMAGE_SIZE = 630                # Resize target (multiple of PATCH_SIZE)
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `TG_BOT_TOKEN` | Telegram bot token | For bot only |
+| `TG_BOT_TOKEN` | Telegram bot token (single bot) | For bot only |
+| `TG_BOT_TOKENS` | Comma-separated tokens (multiple bots) | Alternative to above |
 | `HF_TOKEN` | HuggingFace token | For SAM3 download |
 
 ## Testing
