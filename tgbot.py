@@ -233,85 +233,89 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
         )
 
 
+async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
+                           photo_attachment, reply_to_message_id: int = None):
+    """Download photo, identify characters, and send annotated result."""
+    new_file = await photo_attachment[-1].get_file()
+    temp_path = await download_tg_file(new_file)
+    image = Image.open(temp_path)
+    results = get_identifier().identify(image, top_k=5)
+
+    reply_kwargs = {"chat_id": chat_id}
+    if reply_to_message_id:
+        reply_kwargs["reply_to_message_id"] = reply_to_message_id
+
+    if not results:
+        await context.bot.send_message(**reply_kwargs, text="No matching characters found.")
+        return
+
+    min_confidence = Config.DEFAULT_MIN_CONFIDENCE
+    lines = []
+    for i, result in enumerate(results, 1):
+        filtered = [m for m in result.matches if m.confidence >= min_confidence]
+        if not filtered:
+            continue
+        lines.append(f"Segment {i}:")
+        for n, m in enumerate(filtered):
+            lines.append(f"  {n+1}. {m.character_name or 'Unknown'} ({m.confidence*100:.1f}%)")
+
+    if not lines:
+        await context.bot.send_message(**reply_kwargs, text=f"No matches above {min_confidence:.0%} confidence.")
+        return
+
+    annotated = annotate_image(image, results, min_confidence)
+    with NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+        annotated.save(f, format="JPEG", quality=90)
+        temp_annotated_path = f.name
+
+    msg = "\n".join(lines)
+    print(msg)
+
+    with open(temp_annotated_path, 'rb') as photo_file:
+        await context.bot.send_photo(**reply_kwargs, photo=photo_file)
+    await context.bot.send_message(**reply_kwargs, text=msg)
+    os.unlink(temp_annotated_path)
+
+
 async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Identify the character in a photo."""
-    attachment = update.message.effective_attachment
-    new_file = await attachment[-1].get_file()
+    """Identify characters in a directly sent photo."""
+    try:
+        await identify_and_send(context, update.effective_chat.id, update.message.effective_attachment)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Error: {e}")
+
+
+async def reply_to_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Identify characters when replying to a photo with a bot mention."""
+    if not update.message or not update.message.reply_to_message:
+        return
+    reply_to = update.message.reply_to_message
+    if not reply_to.photo:
+        return
+
+    text = (update.message.text or "").lower()
+    bot_username = (await context.bot.get_me()).username.lower()
+    if f"@{bot_username}" not in text:
+        return
 
     try:
-        temp_path = await download_tg_file(new_file)
-
-        # Load image and identify
-        image = Image.open(temp_path)
-        identifier = get_identifier()
-        results = identifier.identify(image, top_k=5)
-
-        if not results:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="No matching characters found."
-            )
-            return
-
-        # Format response, filtering by minimum confidence
-        min_confidence = Config.DEFAULT_MIN_CONFIDENCE
-        lines = []
-        for i, result in enumerate(results, 1):
-            filtered_matches = [m for m in result.matches if m.confidence >= min_confidence]
-            if not filtered_matches:
-                continue
-            lines.append(f"Characters at segment {i}:")
-            for n, m in enumerate(filtered_matches):
-                name = m.character_name or "Unknown"
-                confidence = m.confidence * 100
-                lines.append(f"{n+1}. {name} ({confidence:.1f}%)")
-
-        if not lines:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"No matches found above {min_confidence:.0%} confidence."
-            )
-            return
-
-        # Create and send annotated image with bounding boxes
-        annotated = annotate_image(image, results, min_confidence)
-        with NamedTemporaryFile(suffix=".jpg", delete=False) as f:
-            annotated.save(f, format="JPEG", quality=90)
-            temp_annotated_path = f.name
-
-        msg = "\n".join(lines)
-        print(msg)
-
-        # Send annotated image, then text as separate message
-        with open(temp_annotated_path, 'rb') as photo_file:
-            await context.bot.send_photo(
-                chat_id=update.effective_chat.id,
-                photo=photo_file
-            )
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=msg
-        )
-
-        # Clean up temp annotated file
-        os.unlink(temp_annotated_path)
-
+        await identify_and_send(context, update.effective_chat.id, reply_to.photo, reply_to.message_id)
     except Exception as e:
-        print(f"Error processing image: {e}", file=sys.stderr)
+        print(f"Error: {e}", file=sys.stderr)
         await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"Error processing image: {e}"
+            chat_id=update.effective_chat.id, reply_to_message_id=reply_to.message_id, text=f"Error: {e}"
         )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command."""
+    bot_username = (await context.bot.get_me()).username
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text="I'm a bot that identifies fursuiters in pictures.\n\n"
-             "Send me a photo and I'll try to identify the character!\n\n"
-             "To add a new character to the database, send a photo with "
-             "the caption: character:Name"
+        text=f"Send me a photo to identify fursuit characters.\n\n"
+             f"To add: send photo with caption character:Name\n"
+             f"To identify a reply: mention @{bot_username}"
     )
 
 
@@ -654,6 +658,10 @@ async def run_bot_and_web():
 
     # Add handlers
     application.add_handler(MessageHandler((~filters.COMMAND) & filters.PHOTO, photo))
+    application.add_handler(MessageHandler(
+        (~filters.COMMAND) & filters.TEXT & filters.REPLY,
+        reply_to_photo
+    ))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("aitool", aitool))
