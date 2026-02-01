@@ -215,6 +215,46 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(Config.INDEX_PATH.endswith(".index"))
 
 
+class TestClassifier(unittest.TestCase):
+    """Tests for the CLIP image classifier."""
+
+    TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+    DRAWING_IMAGE = os.path.join(TESTS_DIR, "barq_drawing.jpg")
+    FURSUIT_IMAGE = os.path.join(TESTS_DIR, "blazi_wolf.1.jpg")
+
+    @classmethod
+    def setUpClass(cls):
+        from sam3_pursuit.models.classifier import ImageClassifier
+        cls.classifier = ImageClassifier()
+
+    def test_drawing_not_fursuit(self):
+        """A cartoon drawing should not be classified as a fursuit."""
+        image = Image.open(self.DRAWING_IMAGE)
+        scores = self.classifier.classify(image)
+        self.assertFalse(
+            self.classifier.is_fursuit(image),
+            f"Drawing should not be classified as fursuit, scores: {scores}",
+        )
+
+    def test_fursuit_photo_is_fursuit(self):
+        """A real fursuit photo should be classified as a fursuit."""
+        image = Image.open(self.FURSUIT_IMAGE)
+        scores = self.classifier.classify(image)
+        self.assertTrue(
+            self.classifier.is_fursuit(image),
+            f"Fursuit photo should be classified as fursuit, scores: {scores}",
+        )
+
+    def test_classify_returns_all_labels(self):
+        """classify() should return scores for all labels."""
+        image = Image.open(self.DRAWING_IMAGE)
+        scores = self.classifier.classify(image)
+        self.assertEqual(set(scores.keys()), set(Config.CLASSIFY_LABELS))
+        for score in scores.values():
+            self.assertGreaterEqual(score, 0.0)
+            self.assertLessEqual(score, 1.0)
+
+
 class TestIdentification(unittest.TestCase):
     """Integration tests for character identification.
 

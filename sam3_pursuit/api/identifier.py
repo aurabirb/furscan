@@ -167,6 +167,8 @@ class SAM3FursuitIdentifier:
         uploaded_by: Optional[str] = None,
         add_full_image: bool = True,
         batch_size: int = 100,
+        skip_non_fursuit: bool = False,
+        classify_threshold: float = Config.DEFAULT_CLASSIFY_THRESHOLD,
     ) -> int:
         assert len(character_names) == len(image_paths)
 
@@ -185,8 +187,14 @@ class SAM3FursuitIdentifier:
         if not filtered_indices:
             return 0
 
+        classifier = None
+        if skip_non_fursuit:
+            from sam3_pursuit.models.classifier import ImageClassifier
+            classifier = ImageClassifier(device=self.device)
+
         total = len(filtered_indices)
         added_count = 0
+        skipped_count = 0
         pending_embeddings: list[np.ndarray] = []
         pending_detections: list[Detection] = []
 
@@ -226,6 +234,11 @@ class SAM3FursuitIdentifier:
                 print(f"[{i+1}/{total}] Failed to load {filename}: {e}")
                 continue
 
+            if classifier and not classifier.is_fursuit(image, threshold=classify_threshold):
+                skipped_count += 1
+                print(f"[{i+1}/{total}] Skipped {filename} (not fursuit)")
+                continue
+
             w, h = image.size
 
             if add_full_image and post_id in posts_need_full:
@@ -263,7 +276,8 @@ class SAM3FursuitIdentifier:
 
         flush_batch()
 
-        print(f"Ingestion complete: {added_count} embeddings added (index: {self.index.size})")
+        skip_msg = f", {skipped_count} skipped (not fursuit)" if skipped_count else ""
+        print(f"Ingestion complete: {added_count} embeddings added{skip_msg} (index: {self.index.size})")
         return added_count
 
     def _load_image(self, img_path: str) -> Image.Image:

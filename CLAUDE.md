@@ -107,6 +107,13 @@ pursuit download furtrack --character "CharacterName"
 pursuit download furtrack --all --max-images 5
 ```
 
+### Download images from Barq
+
+```bash
+export BARQ_BEARER_TOKEN="your_token"
+pursuit download barq --lat 52.378 --lon 4.9
+```
+
 ### View database entries
 
 ```bash
@@ -364,6 +371,7 @@ TARGET_IMAGE_SIZE = 630                # Resize target (multiple of PATCH_SIZE)
 | `TG_BOT_TOKEN` | Telegram bot token (single bot) | For bot only |
 | `TG_BOT_TOKENS` | Comma-separated tokens (multiple bots) | Alternative to above |
 | `HF_TOKEN` | HuggingFace token | For SAM3 download |
+| `BARQ_BEARER_TOKEN` | Barq API bearer token | For barq download |
 
 ## Testing
 

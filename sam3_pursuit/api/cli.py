@@ -22,6 +22,7 @@ Examples:
   pursuit identify photo.jpg
   pursuit add -c "CharName" -s manual img1.jpg img2.jpg
   pursuit download furtrack --all
+  pursuit download barq --lat 52.378 --lon 4.9
   pursuit ingest directory --data-dir ./characters/ -s furtrack
   pursuit stats
         """
@@ -55,6 +56,7 @@ Examples:
     add_parser.add_argument("--save-crops", action="store_true", help="Save crop images for debugging")
     add_parser.add_argument("--no-full", dest="add_full_image", action="store_false",
                            help="Don't add full image embedding (only segments)")
+    _add_classify_args(add_parser)
 
     show_parser = subparsers.add_parser("show", help="View database entries")
     show_parser.add_argument("--by-id", type=int, help="Query by detection ID")
@@ -73,6 +75,7 @@ Examples:
     ingest_parser.add_argument("--save-crops", action="store_true", help="Save crop images")
     ingest_parser.add_argument("--no-full", dest="add_full_image", action="store_false",
                                help="Don't add full image embedding (only segments)")
+    _add_classify_args(ingest_parser)
 
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
     stats_parser.add_argument("--json", action="store_true", help="Output as JSON")
@@ -81,6 +84,12 @@ Examples:
     segment_parser.add_argument("image", help="Path to image file")
     segment_parser.add_argument("--output-dir", "-o", help="Output directory for crops")
     segment_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    classify_parser = subparsers.add_parser("classify", help="Classify images as fursuit or not")
+    classify_parser.add_argument("path", help="Path to image file or directory")
+    classify_parser.add_argument("--threshold", type=float, default=Config.DEFAULT_CLASSIFY_THRESHOLD,
+                                 help="Threshold for fursuit classification")
+    classify_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     download_parser = subparsers.add_parser("download", help="Download images from external sources")
     download_subparsers = download_parser.add_subparsers(dest="source", help="Download source")
@@ -93,6 +102,15 @@ Examples:
                                   help="Max images per character (default: 2)")
     furtrack_parser.add_argument("--output-dir", "-o", default="furtrack_images",
                                   help="Output directory (default: furtrack_images)")
+
+    barq_parser = download_subparsers.add_parser("barq", help="Download from Barq (requires BARQ_BEARER_TOKEN)")
+    barq_parser.add_argument("--lat", type=float, default=52.378, help="Latitude (default: Amsterdam)")
+    barq_parser.add_argument("--lon", type=float, default=4.9, help="Longitude")
+    barq_parser.add_argument("--max-pages", type=int, default=100, help="Max pages to fetch")
+    barq_parser.add_argument("--all-images", action="store_true", help="Download all images per profile")
+    barq_parser.add_argument("--max-age", type=float, help="Skip profiles cached within N days")
+    barq_parser.add_argument("--output-dir", "-o", default="barq_images", help="Output directory (default: barq_images)")
+    _add_classify_args(barq_parser, default=True)
 
     args = parser.parse_args()
 
@@ -112,8 +130,18 @@ Examples:
         stats_command(args)
     elif args.command == "segment":
         segment_command(args)
+    elif args.command == "classify":
+        classify_command(args)
     elif args.command == "download":
         download_command(args)
+
+
+def _add_classify_args(parser, default=None):
+    parser.add_argument("--skip-non-fursuit", action=argparse.BooleanOptionalAction,
+                        default=default,
+                        help="Skip non-fursuit images using CLIP classifier")
+    parser.add_argument("--threshold", type=float, default=Config.DEFAULT_CLASSIFY_THRESHOLD,
+                        help="Classification threshold for --skip-non-fursuit")
 
 
 def _get_isolation_config(args):
@@ -237,6 +265,8 @@ def add_command(args):
         save_crops=args.save_crops,
         source=args.source,
         add_full_image=add_full_image,
+        skip_non_fursuit=args.skip_non_fursuit,
+        classify_threshold=args.threshold,
     )
 
     print(f"\nAdded {added} images for character '{args.character}'")
@@ -369,6 +399,8 @@ def ingest_from_directory(args):
             save_crops=args.save_crops,
             source=source,
             add_full_image=add_full_image,
+            skip_non_fursuit=args.skip_non_fursuit,
+            classify_threshold=args.threshold,
         )
         total_added += added
 
@@ -414,6 +446,8 @@ def ingest_from_nfc25(args):
         save_crops=args.save_crops,
         source=SOURCE_NFC25,
         add_full_image=add_full_image,
+        skip_non_fursuit=args.skip_non_fursuit,
+        classify_threshold=args.threshold,
     )
     total_added += added
 
@@ -489,24 +523,92 @@ def segment_command(args):
             print(f"  {i+1}: bbox={r.bbox}, conf={r.confidence:.0%}")
 
 
-def download_command(args):
-    """Handle download command."""
-    if args.source != "furtrack":
-        print("Error: Use 'pursuit download furtrack'")
+def classify_command(args):
+    """Handle classify command - classify images as fursuit or not."""
+    from sam3_pursuit.models.classifier import ImageClassifier
+
+    target = Path(args.path)
+    if not target.exists():
+        print(f"Error: Path not found: {target}")
         sys.exit(1)
 
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tools"))
-    import download_furtrack
-    if args.output_dir:
-        download_furtrack.IMAGES_DIR = args.output_dir
+    classifier = ImageClassifier()
+    threshold = args.threshold
 
-    if args.character:
-        count = download_furtrack.download_character(args.character, args.max_images)
-        print(f"Downloaded {count} images")
-    elif args.download_all:
-        download_furtrack.download_all_characters(args.max_images)
+    if target.is_file():
+        image_paths = [target]
     else:
-        print("Error: Specify --character or --all")
+        image_paths = sorted(
+            p for p in target.iterdir()
+            if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+        )
+        if not image_paths:
+            print(f"No images found in {target}")
+            sys.exit(1)
+
+    results = []
+    for img_path in image_paths:
+        try:
+            image = Image.open(img_path)
+            scores = classifier.classify(image)
+            fursuit_score = sum(
+                scores[l] for l in scores
+                if l in Config.CLASSIFY_FURSUIT_LABELS
+            )
+            results.append({
+                "file": str(img_path),
+                "scores": scores,
+                "fursuit_score": fursuit_score,
+                "is_fursuit": fursuit_score >= threshold,
+            })
+        except Exception as e:
+            print(f"Error processing {img_path}: {e}")
+            continue
+
+    if args.json:
+        print(json.dumps(results, indent=2))
+    else:
+        for r in results:
+            name = Path(r["file"]).name
+            status = "FURSUIT" if r["is_fursuit"] else "NOT FURSUIT"
+            print(f"\n{name}: {status} (score: {r['fursuit_score']:.1%})")
+            for label, score in sorted(r["scores"].items(), key=lambda x: -x[1]):
+                bar = "#" * int(score * 30)
+                print(f"  {label:25s} {score:6.1%} {bar}")
+
+
+def download_command(args):
+    """Handle download command."""
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tools"))
+
+    if args.source == "furtrack":
+        import download_furtrack
+        if args.output_dir:
+            download_furtrack.IMAGES_DIR = args.output_dir
+        if args.character:
+            count = download_furtrack.download_character(args.character, args.max_images)
+            print(f"Downloaded {count} images")
+        elif args.download_all:
+            download_furtrack.download_all_characters(args.max_images)
+        else:
+            print("Error: Specify --character or --all")
+            sys.exit(1)
+
+    elif args.source == "barq":
+        import asyncio
+        import download_barq
+        if args.output_dir:
+            download_barq.IMAGES_DIR = args.output_dir
+        classify_fn = None
+        if args.skip_non_fursuit:
+            from sam3_pursuit.models.classifier import ImageClassifier
+            classifier = ImageClassifier()
+            threshold = args.threshold
+            classify_fn = lambda img: classifier.is_fursuit(img, threshold=threshold)
+        asyncio.run(download_barq.download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, classify_fn=classify_fn))
+
+    else:
+        print("Error: Use 'pursuit download furtrack' or 'pursuit download barq'")
         sys.exit(1)
 
 

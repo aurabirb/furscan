@@ -13,8 +13,9 @@ SOURCE_FURTRACK = "furtrack"
 SOURCE_NFC25 = "nfc25"
 SOURCE_MANUAL = "manual"
 SOURCE_TGBOT = "tgbot"
+SOURCE_BARQ = "barq"
 
-SOURCES_AVAILABLE = [SOURCE_FURTRACK, SOURCE_NFC25, SOURCE_MANUAL, SOURCE_TGBOT]
+SOURCES_AVAILABLE = [SOURCE_FURTRACK, SOURCE_NFC25, SOURCE_MANUAL, SOURCE_TGBOT, SOURCE_BARQ]
 
 def retry_on_locked(max_retries: int = 8, base_delay: float = 0.2):
     """Retry on 'database is locked' with exponential backoff."""
