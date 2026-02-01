@@ -29,5 +29,6 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 - Add the full fursuit scanner to index on other parts of the body
 - Use e.g. depth-anything to get extra angles on the fursuit
 - Deprioritize low quality segments (low confidence, low res, unusual aspect crop for the prompt etc)
+- Overlapping segments - can we resolve them? Esp. relevant for manual tagging from left to right
 - Run clip on the fursuit crop and store that as a text search index
 - Add text search mode (e.g. "neon green fox or dog with pink harness", "blue dragon with yellow horns and spikes on the head")

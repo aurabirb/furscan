@@ -128,7 +128,7 @@ class TestMultipleSegments(unittest.TestCase):
 
     def test_deduplication_with_source(self):
         """Posts already processed should not need update."""
-        from sam3_pursuit.storage.database import SOURCE_TGBOT, SOURCE_DIRECTORY
+        from sam3_pursuit.storage.database import SOURCE_TGBOT, SOURCE_NFC25
 
         post_id = "test_image_002"
         preproc = "v2|seg:sam3|con:fursuiter|bg:s|bgc:808080|emb:dv2b|tsz:630"
@@ -145,7 +145,7 @@ class TestMultipleSegments(unittest.TestCase):
         self.assertEqual(needs, set())
 
         # Different source should need update (post_id collision handled)
-        needs = self.db.get_posts_needing_update([post_id], preproc, SOURCE_DIRECTORY)
+        needs = self.db.get_posts_needing_update([post_id], preproc, SOURCE_NFC25)
         self.assertEqual(needs, {post_id})
 
 

@@ -9,6 +9,13 @@ from typing import Optional
 from sam3_pursuit.config import Config
 
 
+SOURCE_FURTRACK = "furtrack"
+SOURCE_NFC25 = "nfc25"
+SOURCE_MANUAL = "manual"
+SOURCE_TGBOT = "tgbot"
+
+SOURCES_AVAILABLE = [SOURCE_FURTRACK, SOURCE_NFC25, SOURCE_MANUAL, SOURCE_TGBOT]
+
 def retry_on_locked(max_retries: int = 8, base_delay: float = 0.2):
     """Retry on 'database is locked' with exponential backoff."""
     def decorator(func):
@@ -44,13 +51,6 @@ def get_git_version() -> str:
     except Exception:
         pass
     return "unknown"
-
-
-SOURCE_DIRECTORY = "directory"
-SOURCE_FURTRACK = "furtrack"
-SOURCE_NFC25 = "nfc25"
-SOURCE_MANUAL = "manual"
-SOURCE_TGBOT = "tgbot"
 
 
 def get_source_url(source: Optional[str], post_id: str) -> Optional[str]:

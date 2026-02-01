@@ -7,7 +7,7 @@ from PIL import Image
 
 from sam3_pursuit.config import Config
 from sam3_pursuit.storage.database import (
-    SOURCE_DIRECTORY, SOURCE_FURTRACK, SOURCE_MANUAL, SOURCE_NFC25,
+    SOURCES_AVAILABLE, SOURCE_NFC25,
     get_source_url,
 )
 
@@ -26,14 +26,14 @@ Examples:
   pursuit identify photo.jpg
   pursuit identify photo.jpg --no-segment
 
-  # Add images for a character
-  pursuit add --character "CharacterName" image1.jpg image2.jpg
+  # Add images for a character (source: manual or furtrack)
+  pursuit add --character "CharacterName" --source manual image1.jpg image2.jpg
 
   # View database entries for a character
   pursuit show --by-character "CharacterName"
 
   # Bulk ingest from a directory
-  pursuit ingest --source directory --data-dir ./characters/
+  pursuit ingest directory --data-dir ./characters/ --source manual
 
   # Show statistics
   pursuit stats
@@ -57,11 +57,13 @@ Examples:
     identify_parser.add_argument("image", help="Path to image file")
     identify_parser.add_argument("--top-k", "-k", type=int, default=5, help="Number of results")
     identify_parser.add_argument("--min-confidence", "-m", type=float, default=Config.DEFAULT_MIN_CONFIDENCE,
-                                 help=f"Minimum confidence threshold.")
+                                 help="Minimum confidence threshold.")
     identify_parser.add_argument("--save-crops", action="store_true", help="Save preprocessed crops for debugging")
 
     add_parser = subparsers.add_parser("add", help="Add images for a character")
     add_parser.add_argument("--character", "-c", required=True, help="Character name")
+    add_parser.add_argument("--source", "-s", required=True, choices=SOURCES_AVAILABLE,
+                           help="Source dataset for provenance")
     add_parser.add_argument("images", nargs="+", help="Image paths")
     add_parser.add_argument("--save-crops", action="store_true", help="Save crop images for debugging")
     add_parser.add_argument("--no-full", dest="add_full_image", action="store_false",
@@ -74,9 +76,11 @@ Examples:
     show_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     ingest_parser = subparsers.add_parser("ingest", help="Bulk ingest images")
-    ingest_parser.add_argument("--source", required=True, choices=["directory", "furtrack", "nfc25"],
-                               help="Source type")
+    ingest_parser.add_argument("method", choices=["directory", "nfc25"],
+                               help="Ingestion method")
     ingest_parser.add_argument("--data-dir", required=True, help="Data directory")
+    ingest_parser.add_argument("--source", "-s", required=False, choices=SOURCES_AVAILABLE,
+                           help="Source dataset for provenance")
     ingest_parser.add_argument("--limit", type=int, help="Limit number of images per character")
     ingest_parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
     ingest_parser.add_argument("--save-crops", action="store_true", help="Save crop images")
@@ -216,11 +220,14 @@ def add_command(args):
 
     identifier = _get_identifier(args)
     add_full_image = getattr(args, "add_full_image", True)
+    if args.source not in SOURCES_AVAILABLE:
+        print(f"Error: Invalid source '{args.source}'. Must be one of: {', '.join(SOURCES_AVAILABLE)}")
+        sys.exit(1)
     added = identifier.add_images(
         character_names=[args.character] * len(valid_paths),
         image_paths=valid_paths,
         save_crops=args.save_crops,
-        source=SOURCE_MANUAL,
+        source=args.source,
         add_full_image=add_full_image,
     )
 
@@ -300,11 +307,12 @@ def show_command(args):
 def ingest_command(args):
     """Handle ingest command - bulk import images."""
 
-    if args.source == "directory":
+    if args.method == "directory":
+        if not args.source:
+            print("Error: --source is required for directory ingestion.")
+            sys.exit(1)
         ingest_from_directory(args)
-    elif args.source == "furtrack":
-        ingest_from_furtrack(args)
-    elif args.source == "nfc25":
+    elif args.method == "nfc25":
         ingest_from_nfc25(args)
 
 
@@ -312,13 +320,19 @@ def ingest_from_directory(args):
     """Ingest images from directory structure: data_dir/character_name/*.jpg"""
     from itertools import batched
     batch_size = 100
-    
+
     identifier = _get_identifier(args)
     data_dir = Path(args.data_dir)
 
     if not data_dir.exists():
         print(f"Error: Data directory not found: {data_dir}")
         sys.exit(1)
+
+    # Determine source for provenance
+    if args.source not in SOURCES_AVAILABLE:
+        print(f"Error: Invalid source '{args.source}'. Must be one of: {', '.join(SOURCES_AVAILABLE)}")
+        sys.exit(1)
+    source = args.source
 
     total_added = 0
     def get_images():
@@ -331,7 +345,7 @@ def ingest_from_directory(args):
 
             if args.limit:
                 images = images[:args.limit]
-            
+
             print(f"Ingesting {len(images)} images for {character_name}")
             for img in images:
                 yield (character_name, img)
@@ -345,73 +359,7 @@ def ingest_from_directory(args):
             character_names=names,
             image_paths=[str(p) for p in images],
             save_crops=args.save_crops,
-            source=SOURCE_DIRECTORY,
-            add_full_image=add_full_image,
-        )
-        total_added += added
-
-    print(f"\nTotal: Added {total_added} images")
-
-
-def ingest_from_furtrack(args):
-    """Ingest images from FurTrack download database."""
-    import sqlite3
-
-    identifier = _get_identifier(args)
-
-    data_dir = Path(args.data_dir)
-    furtrack_db = data_dir / "furtrack.db"
-    images_dir = data_dir / "furtrack_images"
-
-    if not furtrack_db.exists():
-        print(f"Error: FurTrack database not found: {furtrack_db}")
-        sys.exit(1)
-
-    if not images_dir.exists():
-        print(f"Error: Images directory not found: {images_dir}")
-        sys.exit(1)
-
-    conn = sqlite3.connect(furtrack_db)
-    c = conn.cursor()
-
-    # TODO: only select entries with single character?
-
-    c.execute("""
-        SELECT post_id, char, url
-        FROM furtrack
-        WHERE char != '' AND url != ''
-    """)
-
-    records = c.fetchall()
-    conn.close()
-
-    print(f"Found {len(records)} records in FurTrack database")
-
-    # Group by character
-    character_images: dict[str, list[str]] = {}
-
-    for post_id, char_name, url in records: # TODO: record source_url in add_image
-        img_path = images_dir / f"{post_id}.jpg"
-        if not img_path.exists():
-            continue
-
-        if char_name not in character_images:
-            character_images[char_name] = []
-        character_images[char_name].append(str(img_path))
-
-    total_added = 0
-
-    add_full_image = getattr(args, "add_full_image", True)
-    for char_name, img_paths in sorted(character_images.items()):
-        if args.limit:
-            img_paths = img_paths[:args.limit]
-
-        print(f"Ingesting {len(img_paths)} images for {char_name}")
-        added = identifier.add_images(
-            character_names=[char_name] * len(img_paths),
-            image_paths=img_paths,
-            save_crops=args.save_crops,
-            source=SOURCE_FURTRACK,
+            source=source,
             add_full_image=add_full_image,
         )
         total_added += added

@@ -89,8 +89,8 @@ pursuit identify photo.jpg --segment --concept "mascot"
 ### Add images for a new character
 
 ```bash
-pursuit add -c "CharacterName" img1.jpg img2.jpg img3.jpg
-pursuit add -c "CharacterName" img1.jpg --segment --save-crops
+pursuit add -c "CharacterName" -s manual img1.jpg img2.jpg img3.jpg
+pursuit add -c "CharacterName" -s furtrack img1.jpg img2.jpg --save-crops
 ```
 
 ### Test segmentation on an image
@@ -112,13 +112,13 @@ pursuit show --by-post "uuid-here"
 
 ```bash
 # From directory structure: data_dir/character_name/*.jpg
-pursuit ingest --source directory --data-dir ./characters/
+pursuit ingest directory --data-dir ./characters/ --source manual
 
-# From FurTrack download
-pursuit ingest --source furtrack --data-dir ./furtrack_data/
+# From directory, sourced from furtrack
+pursuit ingest directory --data-dir ./furtrack_chars/ --source furtrack
 
 # From NFC25 dataset
-pursuit ingest --source nfc25 --data-dir ./nfc25-fursuits/
+pursuit ingest nfc25 --data-dir ./nfc25-fursuits/
 ```
 
 ### View database statistics
@@ -237,11 +237,11 @@ exists = mask_storage.mask_exists("character_001", search=False)
 
 ```bash
 # Add images for individual characters
-pursuit add -c "CharName1" char1_*.jpg
-pursuit add -c "CharName2" char2_*.jpg
+pursuit add -c "CharName1" -s manual char1_*.jpg
+pursuit add -c "CharName2" -s manual char2_*.jpg
 
 # With segmentation (for multi-character photos)
-pursuit add -c "CharName1" photo.jpg --segment
+pursuit add -c "CharName1" -s manual photo.jpg
 ```
 
 ### Option 2: Bulk ingest from directory
@@ -249,17 +249,20 @@ pursuit add -c "CharName1" photo.jpg --segment
 Organize images as `characters/CharacterName/*.jpg`:
 
 ```bash
-pursuit ingest --source directory --data-dir ./characters/
+pursuit ingest directory --data-dir ./characters/ --source manual
 ```
 
 ### Option 3: Download from FurTrack
+
+Download images using the FurTrack tool, then organize into directory structure and ingest:
 
 ```bash
 # Download images
 python tools/download_furtrack.py --download-characters
 
-# Ingest downloaded images
-pursuit ingest --source furtrack --data-dir .
+# Organize downloaded images into characters/CharacterName/*.jpg structure
+# Then ingest as a directory, tagging as furtrack source
+pursuit ingest directory --data-dir ./characters/ --source furtrack
 ```
 
 ### Option 4: Index NFC25 database
@@ -267,7 +270,7 @@ pursuit ingest --source furtrack --data-dir .
 If you have the NFC25 fursuit badge dataset:
 
 ```bash
-pursuit ingest --source nfc25 --data-dir /path/to/nfc25-fursuits
+pursuit ingest nfc25 --data-dir /path/to/nfc25-fursuits
 ```
 
 Expected directory structure:
