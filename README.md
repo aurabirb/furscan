@@ -25,3 +25,9 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 - Allow users to say "@bot this is character_name" and "@bot this not character_name"
 - Try to make it possible to tag several people in the picture correctly (left to right?)
 - Keep record of what each user was sending and doing with the image
+- Use image infill to add occluded part of the fursuit head
+- Add the full fursuit scanner to index on other parts of the body
+- Use e.g. depth-anything to get extra angles on the fursuit
+- Deprioritize low quality segments (low confidence, low res, unusual aspect crop for the prompt etc)
+- Run clip on the fursuit crop and store that as a text search index
+- Add text search mode (e.g. "neon green fox or dog with pink harness", "blue dragon with yellow horns and spikes on the head")
