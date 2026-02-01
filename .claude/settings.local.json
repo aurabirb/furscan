@@ -6,7 +6,10 @@
       "Bash(source .venv/bin/activate)",
       "Bash(python:*)",
       "Bash(fuser:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)"
     ]
   }
 }
