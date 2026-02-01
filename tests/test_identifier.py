@@ -88,6 +88,67 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(stats["unique_posts"], 5)
 
 
+class TestMultipleSegments(unittest.TestCase):
+    """Tests for multiple segments from the same image."""
+
+    def setUp(self):
+        self.temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+        self.temp_file.close()
+        self.db = Database(self.temp_file.name)
+
+    def tearDown(self):
+        os.unlink(self.temp_file.name)
+
+    def test_multiple_segments_no_collision(self):
+        """Multiple segments from same image should not collide."""
+        from sam3_pursuit.storage.database import SOURCE_TGBOT
+
+        post_id = "test_image_001"
+        source = SOURCE_TGBOT
+        preproc = "v2|seg:sam3|con:fursuiter head|bg:s|bgc:808080|emb:dv2b|tsz:630"
+
+        # Add 3 segments from same image (simulating 3 detected fursuiters)
+        for i in range(3):
+            detection = Detection(
+                id=None,
+                post_id=post_id,
+                character_name="test_char",
+                embedding_id=i,
+                bbox_x=i * 100, bbox_y=0, bbox_width=100, bbox_height=100,
+                confidence=0.95,
+                segmentor_model="sam3",
+                source=source,
+                preprocessing_info=preproc,
+            )
+            self.db.add_detection(detection)
+
+        # All 3 should be stored
+        detections = self.db.get_detections_by_post_id(post_id)
+        self.assertEqual(len(detections), 3)
+
+    def test_deduplication_with_source(self):
+        """Posts already processed should not need update."""
+        from sam3_pursuit.storage.database import SOURCE_TGBOT, SOURCE_DIRECTORY
+
+        post_id = "test_image_002"
+        preproc = "v2|seg:sam3|con:fursuiter|bg:s|bgc:808080|emb:dv2b|tsz:630"
+
+        # Add detection with tgbot source
+        self.db.add_detection(Detection(
+            id=None, post_id=post_id, character_name="char",
+            embedding_id=100, bbox_x=0, bbox_y=0, bbox_width=100, bbox_height=100,
+            confidence=0.9, source=SOURCE_TGBOT, preprocessing_info=preproc,
+        ))
+
+        # Same source+post+preproc should not need update
+        needs = self.db.get_posts_needing_update([post_id], preproc, SOURCE_TGBOT)
+        self.assertEqual(needs, set())
+
+        # Different source should need update (post_id collision handled)
+        needs = self.db.get_posts_needing_update([post_id], preproc, SOURCE_DIRECTORY)
+        self.assertEqual(needs, {post_id})
+
+
 class TestVectorIndex(unittest.TestCase):
     """Tests for the vector index module."""
 

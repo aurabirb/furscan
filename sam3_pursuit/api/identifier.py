@@ -24,6 +24,7 @@ class IdentificationResult:
     post_id: str
     bbox: tuple[int, int, int, int]
     segmentor_model: str = "unknown"
+    source: Optional[str] = None
 
 
 @dataclass
@@ -169,7 +170,8 @@ class SAM3FursuitIdentifier:
                 post_id=detection.post_id,
                 bbox=(detection.bbox_x, detection.bbox_y,
                       detection.bbox_width, detection.bbox_height),
-                segmentor_model=detection.segmentor_model
+                segmentor_model=detection.segmentor_model,
+                source=detection.source,
             ))
         results.sort(key=lambda x: x.confidence, reverse=True)
         return results[:top_k]
@@ -180,20 +182,21 @@ class SAM3FursuitIdentifier:
         image_paths: list[str],
         save_crops: bool = False,
         source_url: Optional[str] = None,
+        source: Optional[str] = None,
+        uploaded_by: Optional[str] = None,
         add_full_image: bool = True,
         batch_size: int = 100,
     ) -> int:
         assert len(character_names) == len(image_paths)
 
-        # Normalize character names: lowercase with underscores
         character_names = [name.lower().replace(" ", "_") for name in character_names]
 
         full_preproc = self._build_full_preprocessing_info() if add_full_image else None
         seg_preproc = self._build_preprocessing_info()
 
         post_ids = [self._extract_post_id(p) for p in image_paths]
-        posts_need_full = self.db.get_posts_needing_update(post_ids, full_preproc) if add_full_image else set()
-        posts_need_seg = self.db.get_posts_needing_update(post_ids, seg_preproc)
+        posts_need_full = self.db.get_posts_needing_update(post_ids, full_preproc, source) if add_full_image else set()
+        posts_need_seg = self.db.get_posts_needing_update(post_ids, seg_preproc, source)
         posts_to_process = posts_need_full | posts_need_seg
 
         print(f"Processing {len(posts_to_process)} posts ({len(posts_need_full)} need full, {len(posts_need_seg)} need seg)")
@@ -213,7 +216,8 @@ class SAM3FursuitIdentifier:
                 id=None, post_id=post_id, character_name=character_name, embedding_id=-1,
                 bbox_x=bbox[0], bbox_y=bbox[1], bbox_width=bbox[2], bbox_height=bbox[3],
                 confidence=confidence, segmentor_model=segmentor_model,
-                source_filename=filename, source_url=source_url, is_cropped=is_cropped,
+                source=source, uploaded_by=uploaded_by, source_filename=filename,
+                source_url=source_url, is_cropped=is_cropped,
                 segmentation_concept=seg_concept, preprocessing_info=preproc_info,
                 crop_path=crop_path, mask_path=mask_path,
             )

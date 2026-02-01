@@ -6,6 +6,10 @@ from pathlib import Path
 from PIL import Image
 
 from sam3_pursuit.config import Config
+from sam3_pursuit.storage.database import (
+    SOURCE_DIRECTORY, SOURCE_FURTRACK, SOURCE_MANUAL, SOURCE_NFC25,
+    get_source_url,
+)
 
 
 def main():
@@ -185,6 +189,11 @@ def identify_command(args):
                 print(f"     Confidence: {match.confidence:.2%}")
                 print(f"     Distance: {match.distance:.4f}")
                 print(f"     Post ID: {match.post_id}")
+                if match.source:
+                    print(f"     Source: {match.source}")
+                url = get_source_url(match.source, match.post_id)
+                if url:
+                    print(f"     URL: {url}")
 
 
 def add_command(args):
@@ -211,6 +220,7 @@ def add_command(args):
         character_names=[args.character] * len(valid_paths),
         image_paths=valid_paths,
         save_crops=args.save_crops,
+        source=SOURCE_MANUAL,
         add_full_image=add_full_image,
     )
 
@@ -250,8 +260,10 @@ def show_command(args):
                 "bbox": [d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height],
                 "confidence": d.confidence,
                 "segmentor_model": d.segmentor_model,
+                "source": d.source,
+                "uploaded_by": d.uploaded_by,
                 "source_filename": d.source_filename,
-                "source_url": d.source_url,
+                "source_url": d.source_url or get_source_url(d.source, d.post_id),
                 "is_cropped": d.is_cropped,
                 "segmentation_concept": d.segmentation_concept,
                 "crop_path": d.crop_path,
@@ -270,8 +282,15 @@ def show_command(args):
             print(f"  BBox: ({d.bbox_x}, {d.bbox_y}, {d.bbox_width}x{d.bbox_height})")
             print(f"  Confidence: {d.confidence:.2%}")
             print(f"  Segmentor: {d.segmentor_model}")
+            if d.source:
+                print(f"  Source: {d.source}")
+            if d.uploaded_by:
+                print(f"  Uploaded by: {d.uploaded_by}")
             if d.source_filename:
-                print(f"  Source: {d.source_filename}")
+                print(f"  Filename: {d.source_filename}")
+            url = d.source_url or get_source_url(d.source, d.post_id)
+            if url:
+                print(f"  URL: {url}")
             if d.segmentation_concept:
                 print(f"  Concept: {d.segmentation_concept}")
             if d.preprocessing_info:
@@ -333,6 +352,7 @@ def ingest_from_directory(args):
             character_names=names,
             image_paths=[str(p) for p in images],
             save_crops=args.save_crops,
+            source=SOURCE_DIRECTORY,
             add_full_image=add_full_image,
         )
         total_added += added
@@ -398,6 +418,7 @@ def ingest_from_furtrack(args):
             character_names=[char_name] * len(img_paths),
             image_paths=img_paths,
             save_crops=args.save_crops,
+            source=SOURCE_FURTRACK,
             add_full_image=add_full_image,
         )
         total_added += added
@@ -442,7 +463,7 @@ def ingest_from_nfc25(args):
         character_names=char_names,
         image_paths=img_paths,
         save_crops=args.save_crops,
-        source_url=str(fursuit.get("ImageUrl")),
+        source=SOURCE_NFC25,
         add_full_image=add_full_image,
     )
     total_added += added
@@ -479,6 +500,11 @@ def stats_command(args):
             print("\nGit versions:")
             for version, count in stats['git_version_breakdown'].items():
                 print(f"  {version or 'unknown'}: {count}")
+
+        if stats.get('source_breakdown'):
+            print("\nIngestion sources:")
+            for source, count in stats['source_breakdown'].items():
+                print(f"  {source or 'unknown'}: {count}")
 
         if stats['top_characters']:
             print("\nTop characters:")

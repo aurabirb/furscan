@@ -35,6 +35,7 @@ AITOOL_UPDATE_INTERVAL = float(os.environ.get("AITOOL_UPDATE_INTERVAL", "5.0")) 
 AITOOL_ALLOWED_USERS = os.environ.get("AITOOL_ALLOWED_USERS", "")  # comma-separated list of telegram user IDs or usernames
 
 from sam3_pursuit import SAM3FursuitIdentifier, Config
+from sam3_pursuit.storage.database import SOURCE_TGBOT
 
 # Pattern to match "character:Name" in caption
 CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
@@ -201,6 +202,8 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
     """Add a photo to the database for a character."""
     attachment = update.message.effective_attachment
     new_file = await attachment[-1].get_file()
+    user = update.effective_user
+    uploaded_by = f"@{user.username}" if user and user.username else (str(user.id) if user else None)
     try:
         temp_path = await download_tg_file(new_file)
         identifier = get_identifier()
@@ -208,6 +211,8 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
             character_names=[character_name],
             image_paths=[temp_path],
             source_url=f"tg://bot_upload/chat/{update.effective_chat.id}/msg/{update.message.message_id}/file/{new_file.file_id}",
+            source=SOURCE_TGBOT,
+            uploaded_by=uploaded_by,
             add_full_image=True,
         )
 

@@ -46,6 +46,20 @@ def get_git_version() -> str:
     return "unknown"
 
 
+SOURCE_DIRECTORY = "directory"
+SOURCE_FURTRACK = "furtrack"
+SOURCE_NFC25 = "nfc25"
+SOURCE_MANUAL = "manual"
+SOURCE_TGBOT = "tgbot"
+
+
+def get_source_url(source: Optional[str], post_id: str) -> Optional[str]:
+    """Generate a URL for a post based on its source."""
+    if source == SOURCE_FURTRACK:
+        return f"https://www.furtrack.com/p/{post_id}"
+    return None
+
+
 @dataclass
 class Detection:
     id: Optional[int]
@@ -59,6 +73,8 @@ class Detection:
     confidence: float
     segmentor_model: str = "unknown"
     created_at: Optional[datetime] = None
+    source: Optional[str] = None
+    uploaded_by: Optional[str] = None
     source_filename: Optional[str] = None
     source_url: Optional[str] = None
     is_cropped: bool = False
@@ -73,8 +89,8 @@ class Database:
     _SELECT_FIELDS = """
         id, post_id, character_name, embedding_id, bbox_x, bbox_y,
         bbox_width, bbox_height, confidence, segmentor_model, created_at,
-        source_filename, source_url, is_cropped, segmentation_concept,
-        preprocessing_info, crop_path, mask_path, git_version
+        source, uploaded_by, source_filename, source_url, is_cropped,
+        segmentation_concept, preprocessing_info, crop_path, mask_path, git_version
     """
     _TIMEOUT = 10.0
     _BUSY_TIMEOUT_MS = 15000
@@ -121,14 +137,12 @@ class Database:
                 mask_path TEXT
             )
         """)
-        c.execute("CREATE INDEX IF NOT EXISTS idx_post_id ON detections(post_id)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_character_name ON detections(character_name)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_embedding_id ON detections(embedding_id)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_post_preproc ON detections(post_id, preprocessing_info)")
-
+        # Migrate columns first (before creating indexes that depend on them)
         c.execute("PRAGMA table_info(detections)")
         existing_columns = {row[1] for row in c.fetchall()}
         new_columns = [
+            ("source", "TEXT"),
+            ("uploaded_by", "TEXT"),
             ("source_filename", "TEXT"),
             ("source_url", "TEXT"),
             ("is_cropped", "INTEGER DEFAULT 0"),
@@ -141,23 +155,31 @@ class Database:
         for col_name, col_type in new_columns:
             if col_name not in existing_columns:
                 c.execute(f"ALTER TABLE detections ADD COLUMN {col_name} {col_type}")
+
+        # Create indexes (after columns exist)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_post_id ON detections(post_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_character_name ON detections(character_name)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_embedding_id ON detections(embedding_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_post_preproc ON detections(post_id, preprocessing_info)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_source ON detections(source)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_source_post_preproc ON detections(source, post_id, preprocessing_info)")
         conn.commit()
 
     _INSERT_SQL = """
         INSERT INTO detections
         (post_id, character_name, embedding_id, bbox_x, bbox_y, bbox_width, bbox_height,
-         confidence, segmentor_model, source_filename, source_url, is_cropped,
-         segmentation_concept, preprocessing_info, crop_path, mask_path, git_version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         confidence, segmentor_model, source, uploaded_by, source_filename, source_url,
+         is_cropped, segmentation_concept, preprocessing_info, crop_path, mask_path, git_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     def _detection_to_tuple(self, d: Detection) -> tuple:
         return (
             d.post_id, d.character_name, d.embedding_id,
             d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
-            d.confidence, d.segmentor_model, d.source_filename, d.source_url,
-            1 if d.is_cropped else 0, d.segmentation_concept,
-            d.preprocessing_info, d.crop_path, d.mask_path,
+            d.confidence, d.segmentor_model, d.source, d.uploaded_by,
+            d.source_filename, d.source_url, 1 if d.is_cropped else 0,
+            d.segmentation_concept, d.preprocessing_info, d.crop_path, d.mask_path,
             d.git_version or get_git_version(),
         )
 
@@ -191,14 +213,16 @@ class Database:
             confidence=row[8],
             segmentor_model=row[9],
             created_at=row[10],
-            source_filename=row[11] if len(row) > 11 else None,
-            source_url=row[12] if len(row) > 12 else None,
-            is_cropped=bool(row[13]) if len(row) > 13 else False,
-            segmentation_concept=row[14] if len(row) > 14 else None,
-            preprocessing_info=row[15] if len(row) > 15 else None,
-            crop_path=row[16] if len(row) > 16 else None,
-            mask_path=row[17] if len(row) > 17 else None,
-            git_version=row[18] if len(row) > 18 else None,
+            source=row[11] if len(row) > 11 else None,
+            uploaded_by=row[12] if len(row) > 12 else None,
+            source_filename=row[13] if len(row) > 13 else None,
+            source_url=row[14] if len(row) > 14 else None,
+            is_cropped=bool(row[15]) if len(row) > 15 else False,
+            segmentation_concept=row[16] if len(row) > 16 else None,
+            preprocessing_info=row[17] if len(row) > 17 else None,
+            crop_path=row[18] if len(row) > 18 else None,
+            mask_path=row[19] if len(row) > 19 else None,
+            git_version=row[20] if len(row) > 20 else None,
         )
 
     @retry_on_locked()
@@ -273,6 +297,12 @@ class Database:
         """)
         git_version_breakdown = dict(c.fetchall())
 
+        c.execute("""
+            SELECT source, COUNT(*) as count FROM detections
+            GROUP BY source ORDER BY count DESC
+        """)
+        source_breakdown = dict(c.fetchall())
+
         return {
             "total_detections": total,
             "unique_characters": unique_chars,
@@ -281,6 +311,7 @@ class Database:
             "segmentor_breakdown": segmentor_breakdown,
             "preprocessing_breakdown": preprocessing_breakdown,
             "git_version_breakdown": git_version_breakdown,
+            "source_breakdown": source_breakdown,
         }
 
     @retry_on_locked()
@@ -292,17 +323,25 @@ class Database:
         return exists
 
     @retry_on_locked()
-    def get_posts_needing_update(self, post_ids: list[str], preprocessing_info: str) -> set[str]:
-        """Return post_ids that don't have an entry with this preprocessing_info."""
+    def get_posts_needing_update(
+        self, post_ids: list[str], preprocessing_info: str, source: Optional[str] = None
+    ) -> set[str]:
+        """Return post_ids not yet processed with given preprocessing_info and source."""
         if not post_ids or not preprocessing_info:
             return set(post_ids)
         conn = self._connect()
         c = conn.cursor()
         placeholders = ",".join("?" * len(post_ids))
-        c.execute(
-            f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND preprocessing_info = ?",
-            (*post_ids, preprocessing_info)
-        )
+        if source:
+            c.execute(
+                f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND preprocessing_info = ? AND source = ?",
+                (*post_ids, preprocessing_info, source)
+            )
+        else:
+            c.execute(
+                f"SELECT DISTINCT post_id FROM detections WHERE post_id IN ({placeholders}) AND preprocessing_info = ?",
+                (*post_ids, preprocessing_info)
+            )
         return set(post_ids) - {row[0] for row in c.fetchall()}
 
     @retry_on_locked()
