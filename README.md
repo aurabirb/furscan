@@ -22,4 +22,6 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 - See other pictures of the same character from other databases, preferably not self-hosted for us to not get sued.
 - Create an app that finds fursuit pictures in the camera roll (and maybe monitors it) and keeps a list of who you took pictures of
 - Create call to action to upload some of the pictures you took to furtrack? Labels optional because I don't want to pollute furtrack with bad labels just yet. This will hurt training.
-
+- Allow users to say "@bot this is character_name" and "@bot this not character_name"
+- Try to make it possible to tag several people in the picture correctly (left to right?)
+- Keep record of what each user was sending and doing with the image
