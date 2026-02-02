@@ -116,6 +116,44 @@ def get_filtered_images(threshold: float) -> set[str]:
     return {row[0] for row in rows}
 
 
+def clean_images(score_fn, threshold: float):
+    """Delete existing images that score below the threshold."""
+    from PIL import Image
+
+    images_dir = Path(IMAGES_DIR)
+    if not images_dir.exists():
+        print(f"No images directory: {images_dir}")
+        return
+
+    filtered_uuids = get_filtered_images(threshold)
+    deleted = 0
+    kept = 0
+
+    for char_folder in sorted(images_dir.iterdir()):
+        if not char_folder.is_dir():
+            continue
+
+        for img_path in char_folder.glob("*.jpg"):
+            img_uuid = img_path.stem
+            if img_uuid in filtered_uuids:
+                continue
+
+            try:
+                img = Image.open(img_path)
+                score = score_fn(img)
+                if score < threshold:
+                    img_path.unlink()
+                    save_filtered_image(img_uuid, score)
+                    print(f"  {char_folder.name}: {img_uuid}.jpg (deleted: {score:.0%} < {threshold:.0%})")
+                    deleted += 1
+                else:
+                    kept += 1
+            except Exception as e:
+                print(f"  Error processing {img_path}: {e}")
+
+    print(f"\nDeleted: {deleted}, kept: {kept}")
+
+
 def get_headers() -> dict:
     token = os.environ.get("BARQ_BEARER_TOKEN")
     if not token:
@@ -268,6 +306,26 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                     folder_name = get_folder_name(p)
                     char_folder = Path(IMAGES_DIR) / folder_name
                     existing = get_existing_images(char_folder)
+
+                    # Classify existing images that haven't been scored yet
+                    if score_fn:
+                        for img_uuid in img_uuids:
+                            if img_uuid in existing and img_uuid not in filtered_uuids:
+                                dest = char_folder / f"{img_uuid}.jpg"
+                                from PIL import Image
+                                try:
+                                    img = Image.open(dest)
+                                    score = score_fn(img)
+                                    if score < threshold:
+                                        dest.unlink()
+                                        existing.discard(img_uuid)
+                                        save_filtered_image(img_uuid, score)
+                                        filtered_uuids.add(img_uuid)
+                                        print(f"  {folder_name}: {img_uuid}.jpg (filtered existing: {score:.0%} < {threshold:.0%})")
+                                        filtered += 1
+                                except Exception:
+                                    pass
+
                     new_uuids = [u for u in img_uuids if u not in existing and u not in filtered_uuids]
 
                     if not new_uuids:

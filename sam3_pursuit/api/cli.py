@@ -110,6 +110,7 @@ Examples:
     barq_parser.add_argument("--all-images", action="store_true", help="Download all images per profile")
     barq_parser.add_argument("--max-age", type=float, help="Skip profiles cached within N days")
     barq_parser.add_argument("--output-dir", "-o", default="barq_images", help="Output directory (default: barq_images)")
+    barq_parser.add_argument("--clean", action="store_true", help="Delete existing images below threshold (no download)")
     _add_classify_args(barq_parser, default=True)
 
     args = parser.parse_args()
@@ -599,12 +600,18 @@ def download_command(args):
         import download_barq
         if args.output_dir:
             download_barq.IMAGES_DIR = args.output_dir
-        score_fn = None
-        if args.skip_non_fursuit:
+
+        if args.clean:
             from sam3_pursuit.models.classifier import ImageClassifier
             classifier = ImageClassifier()
-            score_fn = classifier.fursuit_score
-        asyncio.run(download_barq.download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, threshold=args.threshold))
+            download_barq.clean_images(classifier.fursuit_score, args.threshold)
+        else:
+            score_fn = None
+            if args.skip_non_fursuit:
+                from sam3_pursuit.models.classifier import ImageClassifier
+                classifier = ImageClassifier()
+                score_fn = classifier.fursuit_score
+            asyncio.run(download_barq.download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, threshold=args.threshold))
 
     else:
         print("Error: Use 'pursuit download furtrack' or 'pursuit download barq'")
