@@ -43,4 +43,5 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 - Find pictures with multiple fursuits and if we have at least 3, we can pick out which segment is the real tag by running self-similarity on a character pictures and mark all other segments as someone else. That way we reduce the noise.
 - Run a self-similarity search on all database and cluster all potential segments to potentially assign it a tag, this is an extension of the previous point.
 - Introduce a raw storage and process pipeline so that we can always recreate the results. This means a database/table with user edits and clustering results.
+- Run a SAM2 + clip on each fragment instead of heavy SAM3 to determine if it's a fursuit head on the segment.
 
