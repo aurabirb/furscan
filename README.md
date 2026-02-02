@@ -11,7 +11,7 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 - Create a validation dataset from pictures that have not been downloaded from furtrack (we only download 2 out of many for each characters)
 - Import an alias database from furtrack so that we can cross-validate characters appearing in e.g. nfc25 and furtrack
 - Create other preprocessing pipelines and assess their score on the validation dataset, such as black-and-white preprocessing, brightness normalization, etc.
-- Combine results of several indices into a single weighted signal
+- Combine results of several detections / indices into a single weighted signal
 - Prioritize most recently seen fursuits when scoring results
 - Create nice icons for tg bots (I'm thinking of the fursuit with a labeled bounding box, so that it is obvious what this bot does)
 - Make a feature to import the index data from another instance (to make it sync new fursuits across several running instances of the detector)
@@ -40,3 +40,7 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 - Add a command to search for fursuits - input a name and get image URLs for a given character (or a partial name match). Make sure to include the origin in the response.
 - Make the bot respond to edited messages
 - Make the bot work in group chats with mentions and document how to set it up
+- Find pictures with multiple fursuits and if we have at least 3, we can pick out which segment is the real tag by running self-similarity on a character pictures and mark all other segments as someone else. That way we reduce the noise.
+- Run a self-similarity search on all database and cluster all potential segments to potentially assign it a tag, this is an extension of the previous point.
+- Introduce a raw storage and process pipeline so that we can always recreate the results. This means a database/table with user edits and clustering results.
+
