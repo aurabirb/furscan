@@ -37,4 +37,6 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 - Add social login to the bot hello message, ie login with google/furaffinity/furtrack/barq/twitter etc so that we can analyze, attribute and upload images there later
 - Add a link to the app to the bot hello message.
 - Use Filesystem API in the webapp to list contents of users' folder periodically without having to select individual photos.
-
+- Add a command to search for fursuits - input a name and get image URLs for a given character (or a partial name match). Make sure to include the origin in the response.
+- Make the bot respond to edited messages
+- Make the bot work in group chats with mentions and document how to set it up
