@@ -33,6 +33,7 @@ static/models/
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # macOS
 ._*
