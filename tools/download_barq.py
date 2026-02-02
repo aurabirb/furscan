@@ -66,6 +66,13 @@ def get_cache_db() -> sqlite3.Connection:
             max_score REAL
         )
     """)
+    _conn.execute("""
+        CREATE TABLE IF NOT EXISTS failed_images (
+            image_uuid TEXT PRIMARY KEY,
+            failed_at INTEGER NOT NULL,
+            status_code INTEGER
+        )
+    """)
     try:
         _conn.execute("ALTER TABLE filtered_images ADD COLUMN max_score REAL")
     except sqlite3.OperationalError:
@@ -113,6 +120,20 @@ def get_filtered_images(threshold: float) -> set[str]:
         "SELECT image_uuid FROM filtered_images WHERE max_score IS NULL OR max_score < ?",
         (threshold,)
     ).fetchall()
+    return {row[0] for row in rows}
+
+
+def save_failed_image(image_uuid: str, status_code: int):
+    conn = get_cache_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO failed_images (image_uuid, failed_at, status_code) VALUES (?, ?, ?)",
+        (image_uuid, int(time.time()), status_code)
+    )
+    conn.commit()
+
+
+def get_failed_images() -> set[str]:
+    rows = get_cache_db().execute("SELECT image_uuid FROM failed_images").fetchall()
     return {row[0] for row in rows}
 
 
@@ -243,15 +264,17 @@ async def fetch_profiles(session: aiohttp.ClientSession, lat: float, lon: float,
     return profiles, next_cursor
 
 
-async def download_image(session: aiohttp.ClientSession, image_uuid: str, dest: Path, semaphore: asyncio.Semaphore) -> bool:
+async def download_image(session: aiohttp.ClientSession, image_uuid: str, dest: Path, semaphore: asyncio.Semaphore) -> tuple[bool, int | None]:
+    """Download image. Returns (success, status_code)."""
     url = f"https://assets.barq.app/image/{image_uuid}.jpeg?width=512"
     async with semaphore:
         resp = await fetch_with_backoff(session, "GET", url)
         if resp and resp.status == 200:
             dest.write_bytes(await resp.read())
-            return True
-        print(f"  Failed {image_uuid}: {resp.status if resp else 'no response'}")
-        return False
+            return True, 200
+        status = resp.status if resp else None
+        print(f"  Failed {image_uuid}: {status or 'no response'}")
+        return False, status
 
 
 async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, all_images: bool = False, max_age: float | None = None, score_fn=None, threshold: float = 0.85):
@@ -259,6 +282,7 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
     headers = get_headers()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
     filtered_uuids = get_filtered_images(threshold) if score_fn else set()
+    failed_uuids = get_failed_images()
 
     async with aiohttp.ClientSession(headers=headers) as session:
         cursor = ""
@@ -326,7 +350,7 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                                 except Exception:
                                     pass
 
-                    new_uuids = [u for u in img_uuids if u not in existing and u not in filtered_uuids]
+                    new_uuids = [u for u in img_uuids if u not in existing and u not in filtered_uuids and u not in failed_uuids]
 
                     if not new_uuids:
                         print(f"  {folder_name}: up to date ({len(existing)} images)")
@@ -336,24 +360,30 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                         char_folder.mkdir(parents=True, exist_ok=True)
                         dest = char_folder / f"{img_uuid}.jpg"
 
-                        if await download_image(session, img_uuid, dest, semaphore):
-                            if score_fn:
-                                from PIL import Image
-                                try:
-                                    img = Image.open(dest)
-                                    score = score_fn(img)
-                                    if score < threshold:
-                                        dest.unlink()
-                                        save_filtered_image(img_uuid, score)
-                                        filtered_uuids.add(img_uuid)
-                                        print(f"  {folder_name}: {img_uuid}.jpg (filtered: {score:.0%} < {threshold:.0%})")
-                                        filtered += 1
-                                        continue
-                                except Exception:
-                                    pass
-                            print(f"  {folder_name}: {img_uuid}.jpg")
-                            total += 1
-                            existing.add(img_uuid)
+                        success, status = await download_image(session, img_uuid, dest, semaphore)
+                        if not success:
+                            if status == 404:
+                                save_failed_image(img_uuid, status)
+                                failed_uuids.add(img_uuid)
+                            continue
+
+                        if score_fn:
+                            from PIL import Image
+                            try:
+                                img = Image.open(dest)
+                                score = score_fn(img)
+                                if score < threshold:
+                                    dest.unlink()
+                                    save_filtered_image(img_uuid, score)
+                                    filtered_uuids.add(img_uuid)
+                                    print(f"  {folder_name}: {img_uuid}.jpg (filtered: {score:.0%} < {threshold:.0%})")
+                                    filtered += 1
+                                    continue
+                            except Exception:
+                                pass
+                        print(f"  {folder_name}: {img_uuid}.jpg")
+                        total += 1
+                        existing.add(img_uuid)
                 except Exception as e:
                     print(f"  Error processing profile {p.get('id', '?')}: {e}")
 
