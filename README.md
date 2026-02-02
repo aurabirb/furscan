@@ -6,8 +6,8 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 ## TODO (unordered):
 01.02.2026
 
-- Keep metadata of which dataset and when the photo was ingested in the database
-- Create an ingestor to parse BARQ webapp fursuit pictures to a new dataset
+- [x] Keep metadata of which dataset and when the photo was ingested in the database
+- [x] Create an ingestor to parse BARQ webapp fursuit pictures to a new dataset
 - Create a validation dataset from pictures that have not been downloaded from furtrack (we only download 2 out of many for each characters)
 - Import an alias database from furtrack so that we can cross-validate characters appearing in e.g. nfc25 and furtrack
 - Create other preprocessing pipelines and assess their score on the validation dataset, such as black-and-white preprocessing, brightness normalization, etc.
@@ -32,3 +32,9 @@ Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
 - Overlapping segments - can we resolve them? Esp. relevant for manual tagging from left to right
 - Run clip on the fursuit crop and store that as a text search index
 - Add text search mode (e.g. "neon green fox or dog with pink harness", "blue dragon with yellow horns and spikes on the head")
+
+02.02.2026
+- Add social login to the bot hello message, ie login with google/furaffinity/furtrack/barq/twitter etc so that we can analyze, attribute and upload images there later
+- Add a link to the app to the bot hello message.
+- Use Filesystem API in the webapp to list contents of users' folder periodically without having to select individual photos.
+
