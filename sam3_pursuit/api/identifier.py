@@ -169,6 +169,7 @@ class SAM3FursuitIdentifier:
         batch_size: int = 100,
         skip_non_fursuit: bool = False,
         classify_threshold: float = Config.DEFAULT_CLASSIFY_THRESHOLD,
+        post_ids: Optional[list[str]] = None,
     ) -> int:
         assert len(character_names) == len(image_paths)
 
@@ -177,7 +178,10 @@ class SAM3FursuitIdentifier:
         full_preproc = self._build_full_preprocessing_info() if add_full_image else None
         seg_preproc = self._build_preprocessing_info()
 
-        post_ids = [self._extract_post_id(p) for p in image_paths]
+        if post_ids is not None:
+            assert len(post_ids) == len(image_paths)
+        else:
+            post_ids = [self._extract_post_id(p) for p in image_paths]
         posts_need_full = self.db.get_posts_needing_update(post_ids, full_preproc, source) if add_full_image else set()
         posts_need_seg = self.db.get_posts_needing_update(post_ids, seg_preproc, source)
         posts_to_process = posts_need_full | posts_need_seg

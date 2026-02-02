@@ -65,7 +65,7 @@ Examples:
     show_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     ingest_parser = subparsers.add_parser("ingest", help="Bulk ingest images")
-    ingest_parser.add_argument("method", choices=["directory", "nfc25"],
+    ingest_parser.add_argument("method", choices=["directory", "nfc25", "barq"],
                                help="Ingestion method")
     ingest_parser.add_argument("--data-dir", required=True, help="Data directory")
     ingest_parser.add_argument("--source", "-s", required=False, choices=SOURCES_AVAILABLE,
@@ -353,6 +353,8 @@ def ingest_command(args):
         ingest_from_directory(args)
     elif args.method == "nfc25":
         ingest_from_nfc25(args)
+    elif args.method == "barq":
+        ingest_from_barq(args)
 
 
 def ingest_from_directory(args):
@@ -453,6 +455,67 @@ def ingest_from_nfc25(args):
     total_added += added
 
     print(f"\nTotal: Added {total_added} images")
+
+
+def ingest_from_barq(args):
+    """Ingest images from Barq download directory.
+
+    Folder structure: {profile_id}.{character_name}/{image_uuid}.jpg
+    Image UUIDs are used as post_ids (extracted from filename automatically).
+    Profile metadata can be looked up from barq_cache.db if needed.
+    """
+    from itertools import batched
+    from sam3_pursuit.storage.database import SOURCE_BARQ
+
+    batch_size = 100
+    identifier = _get_identifier(args)
+    data_dir = Path(args.data_dir)
+
+    if not data_dir.exists():
+        print(f"Error: Data directory not found: {data_dir}")
+        sys.exit(1)
+
+    total_added = 0
+
+    def get_images():
+        # Iterate directories matching pattern: {profile_id}.{name}
+        for char_dir in sorted(data_dir.iterdir()):
+            if not char_dir.is_dir():
+                continue
+
+            dir_name = char_dir.name
+            # Parse profile_id.character_name format
+            if "." not in dir_name:
+                continue
+
+            character_name = dir_name.split(".", 1)[1]
+            images = list(char_dir.glob("*.jpg")) + list(char_dir.glob("*.png")) + list(char_dir.glob("*.jpeg"))
+
+            if args.limit:
+                images = images[:args.limit]
+
+            if images:
+                print(f"Ingesting {len(images)} images for {character_name}")
+
+            for img in images:
+                yield (character_name, img)
+
+    for batch in batched(get_images(), batch_size):
+        print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
+        names, images = zip(*batch)
+        add_full_image = getattr(args, "add_full_image", True)
+        added = identifier.add_images(
+            character_names=names,
+            image_paths=[str(p) for p in images],
+            save_crops=args.save_crops,
+            source=SOURCE_BARQ,
+            add_full_image=add_full_image,
+            skip_non_fursuit=args.skip_non_fursuit,
+            classify_threshold=args.threshold,
+        )
+        total_added += added
+
+    print(f"\nTotal: Added {total_added} images from Barq")
 
 
 def stats_command(args):

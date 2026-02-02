@@ -58,6 +58,8 @@ def get_source_url(source: Optional[str], post_id: str) -> Optional[str]:
     """Generate a URL for a post based on its source."""
     if source == SOURCE_FURTRACK:
         return f"https://www.furtrack.com/p/{post_id}"
+    elif source == SOURCE_BARQ:
+        return f"https://assets.barq.app/image/{post_id}.jpeg"
     return None
 
 

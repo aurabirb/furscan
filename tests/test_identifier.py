@@ -386,5 +386,148 @@ class TestIdentification(unittest.TestCase):
             )
 
 
+class TestBarqIngestion(unittest.TestCase):
+    """Tests for Barq image ingestion."""
+
+    TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+    TEST_IMAGE = os.path.join(TESTS_DIR, "blazi_wolf.1.jpg")
+
+    def test_get_source_url_barq(self):
+        """Test that barq source URL links to the image."""
+        from sam3_pursuit.storage.database import get_source_url, SOURCE_BARQ
+
+        image_uuid = "abc123-def456-ghi789"
+        url = get_source_url(SOURCE_BARQ, image_uuid)
+
+        self.assertEqual(url, f"https://assets.barq.app/image/{image_uuid}.jpeg")
+
+    def test_barq_directory_structure_parsing(self):
+        """Test that barq ingestion correctly parses folder structure."""
+        import shutil
+        from sam3_pursuit.storage.database import SOURCE_BARQ
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create barq-style directory structure: {profile_id}.{name}/{image_uuid}.jpg
+            data_dir = os.path.join(tmpdir, "barq_images")
+            os.makedirs(data_dir)
+
+            # Create test folders with images
+            char1_dir = os.path.join(data_dir, "12345.TestCharacter")
+            char2_dir = os.path.join(data_dir, "67890.AnotherChar")
+            os.makedirs(char1_dir)
+            os.makedirs(char2_dir)
+
+            # Copy test image with UUID-style names
+            img1_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            img2_uuid = "11111111-2222-3333-4444-555555555555"
+            shutil.copy(self.TEST_IMAGE, os.path.join(char1_dir, f"{img1_uuid}.jpg"))
+            shutil.copy(self.TEST_IMAGE, os.path.join(char2_dir, f"{img2_uuid}.jpg"))
+
+            # Create temp db and index
+            db_path = os.path.join(tmpdir, "test.db")
+            index_path = os.path.join(tmpdir, "test.index")
+
+            from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
+            identifier = SAM3FursuitIdentifier(db_path=db_path, index_path=index_path)
+
+            # Run barq ingestion manually (simulating CLI)
+            from pathlib import Path
+            from sam3_pursuit.storage.database import Database
+
+            data_path = Path(data_dir)
+            char_names = []
+            img_paths = []
+
+            for char_dir in sorted(data_path.iterdir()):
+                if not char_dir.is_dir() or "." not in char_dir.name:
+                    continue
+                character_name = char_dir.name.split(".", 1)[1]
+                for img in char_dir.glob("*.jpg"):
+                    char_names.append(character_name)
+                    img_paths.append(str(img))
+
+            added = identifier.add_images(
+                character_names=char_names,
+                image_paths=img_paths,
+                source=SOURCE_BARQ,
+            )
+
+            self.assertGreater(added, 0, "Should add at least one embedding")
+
+            # Verify detections use image UUID as post_id
+            db = Database(db_path)
+            det1 = db.get_detections_by_post_id(img1_uuid)
+            det2 = db.get_detections_by_post_id(img2_uuid)
+
+            self.assertGreater(len(det1), 0, f"Should find detection for {img1_uuid}")
+            self.assertGreater(len(det2), 0, f"Should find detection for {img2_uuid}")
+
+            # Verify character names are correct
+            self.assertEqual(det1[0].character_name, "testcharacter")
+            self.assertEqual(det2[0].character_name, "anotherchar")
+
+            # Verify source is barq
+            self.assertEqual(det1[0].source, SOURCE_BARQ)
+            self.assertEqual(det2[0].source, SOURCE_BARQ)
+
+    def test_barq_folder_without_dot_is_skipped(self):
+        """Test that folders without profile_id.name format are skipped."""
+        import shutil
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = os.path.join(tmpdir, "barq_images")
+            os.makedirs(data_dir)
+
+            # Create a folder without the dot separator (should be skipped)
+            invalid_dir = os.path.join(data_dir, "InvalidFolderName")
+            os.makedirs(invalid_dir)
+            shutil.copy(self.TEST_IMAGE, os.path.join(invalid_dir, "test.jpg"))
+
+            # Create a valid folder
+            valid_dir = os.path.join(data_dir, "123.ValidChar")
+            os.makedirs(valid_dir)
+            shutil.copy(self.TEST_IMAGE, os.path.join(valid_dir, "valid-uuid.jpg"))
+
+            db_path = os.path.join(tmpdir, "test.db")
+            index_path = os.path.join(tmpdir, "test.index")
+
+            from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
+            from sam3_pursuit.storage.database import SOURCE_BARQ, Database
+            from pathlib import Path
+
+            identifier = SAM3FursuitIdentifier(db_path=db_path, index_path=index_path)
+            data_path = Path(data_dir)
+
+            char_names = []
+            img_paths = []
+
+            for char_dir in sorted(data_path.iterdir()):
+                if not char_dir.is_dir() or "." not in char_dir.name:
+                    continue
+                character_name = char_dir.name.split(".", 1)[1]
+                for img in char_dir.glob("*.jpg"):
+                    char_names.append(character_name)
+                    img_paths.append(str(img))
+
+            # Should only find 1 image (from valid folder)
+            self.assertEqual(len(img_paths), 1)
+            self.assertIn("ValidChar", char_names[0])
+
+            added = identifier.add_images(
+                character_names=char_names,
+                image_paths=img_paths,
+                source=SOURCE_BARQ,
+            )
+
+            db = Database(db_path)
+            # Only valid-uuid should exist
+            valid_det = db.get_detections_by_post_id("valid-uuid")
+            self.assertGreater(len(valid_det), 0)
+
+            # test.jpg from invalid folder should not exist
+            invalid_det = db.get_detections_by_post_id("test")
+            self.assertEqual(len(invalid_det), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
