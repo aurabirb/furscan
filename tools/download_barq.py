@@ -62,9 +62,14 @@ def get_cache_db() -> sqlite3.Connection:
     _conn.execute("""
         CREATE TABLE IF NOT EXISTS filtered_images (
             image_uuid TEXT PRIMARY KEY,
-            filtered_at INTEGER NOT NULL
+            filtered_at INTEGER NOT NULL,
+            max_score REAL
         )
     """)
+    try:
+        _conn.execute("ALTER TABLE filtered_images ADD COLUMN max_score REAL")
+    except sqlite3.OperationalError:
+        pass
     _conn.commit()
     return _conn
 
@@ -94,17 +99,20 @@ def save_profile(profile: dict):
     conn.commit()
 
 
-def save_filtered_image(image_uuid: str):
+def save_filtered_image(image_uuid: str, max_score: float):
     conn = get_cache_db()
     conn.execute(
-        "INSERT OR IGNORE INTO filtered_images (image_uuid, filtered_at) VALUES (?, ?)",
-        (image_uuid, int(time.time()))
+        "INSERT OR REPLACE INTO filtered_images (image_uuid, filtered_at, max_score) VALUES (?, ?, ?)",
+        (image_uuid, int(time.time()), max_score)
     )
     conn.commit()
 
 
-def get_filtered_images() -> set[str]:
-    rows = get_cache_db().execute("SELECT image_uuid FROM filtered_images").fetchall()
+def get_filtered_images(threshold: float) -> set[str]:
+    rows = get_cache_db().execute(
+        "SELECT image_uuid FROM filtered_images WHERE max_score IS NULL OR max_score < ?",
+        (threshold,)
+    ).fetchall()
     return {row[0] for row in rows}
 
 
@@ -208,11 +216,11 @@ async def download_image(session: aiohttp.ClientSession, image_uuid: str, dest: 
         return False
 
 
-async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, all_images: bool = False, max_age: float | None = None, classify_fn=None):
+async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, all_images: bool = False, max_age: float | None = None, score_fn=None, threshold: float = 0.85):
     """Download profile images from Barq."""
     headers = get_headers()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
-    filtered_uuids = get_filtered_images() if classify_fn else set()
+    filtered_uuids = get_filtered_images(threshold) if score_fn else set()
 
     async with aiohttp.ClientSession(headers=headers) as session:
         cursor = ""
@@ -271,15 +279,16 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                         dest = char_folder / f"{img_uuid}.jpg"
 
                         if await download_image(session, img_uuid, dest, semaphore):
-                            if classify_fn:
+                            if score_fn:
                                 from PIL import Image
                                 try:
                                     img = Image.open(dest)
-                                    if not classify_fn(img):
+                                    score = score_fn(img)
+                                    if score < threshold:
                                         dest.unlink()
-                                        save_filtered_image(img_uuid)
+                                        save_filtered_image(img_uuid, score)
                                         filtered_uuids.add(img_uuid)
-                                        print(f"  {folder_name}: {img_uuid}.jpg (filtered: not fursuit)")
+                                        print(f"  {folder_name}: {img_uuid}.jpg (filtered: {score:.0%} < {threshold:.0%})")
                                         filtered += 1
                                         continue
                                 except Exception:
@@ -309,12 +318,12 @@ def main():
     args = parser.parse_args()
 
     if args.download_all:
-        classify_fn = None
+        score_fn = None
         if args.skip_non_fursuit:
             from sam3_pursuit.models.classifier import ImageClassifier
             classifier = ImageClassifier()
-            classify_fn = classifier.is_fursuit
-        asyncio.run(download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, classify_fn=classify_fn))
+            score_fn = classifier.fursuit_score
+        asyncio.run(download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn))
     else:
         parser.print_help()
 

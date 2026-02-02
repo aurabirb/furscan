@@ -32,10 +32,13 @@ class ImageClassifier:
 
         return {label: prob.item() for label, prob in zip(Config.CLASSIFY_LABELS, probs)}
 
+    def fursuit_score(self, image: Image.Image) -> float:
+        scores = self.classify(image)
+        return max((scores[l] for l in Config.CLASSIFY_FURSUIT_LABELS), default=0.0)
+
     def is_fursuit(
         self,
         image: Image.Image,
         threshold: float = Config.DEFAULT_CLASSIFY_THRESHOLD,
     ) -> bool:
-        scores = self.classify(image)
-        return any(scores[l] >= threshold for l in Config.CLASSIFY_FURSUIT_LABELS)
+        return self.fursuit_score(image) >= threshold

@@ -599,13 +599,12 @@ def download_command(args):
         import download_barq
         if args.output_dir:
             download_barq.IMAGES_DIR = args.output_dir
-        classify_fn = None
+        score_fn = None
         if args.skip_non_fursuit:
             from sam3_pursuit.models.classifier import ImageClassifier
             classifier = ImageClassifier()
-            threshold = args.threshold
-            classify_fn = lambda img: classifier.is_fursuit(img, threshold=threshold)
-        asyncio.run(download_barq.download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, classify_fn=classify_fn))
+            score_fn = classifier.fursuit_score
+        asyncio.run(download_barq.download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, threshold=args.threshold))
 
     else:
         print("Error: Use 'pursuit download furtrack' or 'pursuit download barq'")

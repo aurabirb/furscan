@@ -33,7 +33,7 @@ class Config:
     CLASSIFY_FURSUIT_LABELS = {"a photo of a fursuit", "a photo of an animal costume", "a photo of a mascot"}
     CLASSIFY_OTHER_LABELS = ["a photo of a person", "a photo of nature or objects", "a cartoon or drawing"]
     CLASSIFY_LABELS = [*CLASSIFY_FURSUIT_LABELS, *CLASSIFY_OTHER_LABELS]
-    DEFAULT_CLASSIFY_THRESHOLD = 0.97
+    DEFAULT_CLASSIFY_THRESHOLD = 0.85
 
     # Detection
     DETECTION_CONFIDENCE = 0.5
