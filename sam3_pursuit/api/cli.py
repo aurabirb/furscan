@@ -551,15 +551,15 @@ def classify_command(args):
         try:
             image = Image.open(img_path)
             scores = classifier.classify(image)
-            fursuit_score = sum(
-                scores[l] for l in scores
-                if l in Config.CLASSIFY_FURSUIT_LABELS
+            top_fursuit = max(
+                (scores[l] for l in Config.CLASSIFY_FURSUIT_LABELS),
+                default=0,
             )
             results.append({
                 "file": str(img_path),
                 "scores": scores,
-                "fursuit_score": fursuit_score,
-                "is_fursuit": fursuit_score >= threshold,
+                "top_fursuit_score": top_fursuit,
+                "is_fursuit": top_fursuit >= threshold,
             })
         except Exception as e:
             print(f"Error processing {img_path}: {e}")
@@ -571,7 +571,7 @@ def classify_command(args):
         for r in results:
             name = Path(r["file"]).name
             status = "FURSUIT" if r["is_fursuit"] else "NOT FURSUIT"
-            print(f"\n{name}: {status} (score: {r['fursuit_score']:.1%})")
+            print(f"\n{name}: {status} (top: {r['top_fursuit_score']:.1%})")
             for label, score in sorted(r["scores"].items(), key=lambda x: -x[1]):
                 bar = "#" * int(score * 30)
                 print(f"  {label:25s} {score:6.1%} {bar}")

@@ -62,8 +62,10 @@ class Config:
     @staticmethod
     def get_device() -> str:
         if torch.cuda.is_available():
-            return "cuda"
-        elif torch.backends.mps.is_available():
+            cap = torch.cuda.get_device_capability()
+            if cap >= (7, 0):
+                return "cuda"
+        if torch.backends.mps.is_available():
             os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
             os.environ['FAISS_OPT_LEVEL'] = ''
             return "mps"

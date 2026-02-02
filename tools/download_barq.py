@@ -59,6 +59,12 @@ def get_cache_db() -> sqlite3.Connection:
             updated_at INTEGER NOT NULL
         )
     """)
+    _conn.execute("""
+        CREATE TABLE IF NOT EXISTS filtered_images (
+            image_uuid TEXT PRIMARY KEY,
+            filtered_at INTEGER NOT NULL
+        )
+    """)
     _conn.commit()
     return _conn
 
@@ -86,6 +92,20 @@ def save_profile(profile: dict):
         (profile["id"], json.dumps(profile), int(time.time()))
     )
     conn.commit()
+
+
+def save_filtered_image(image_uuid: str):
+    conn = get_cache_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO filtered_images (image_uuid, filtered_at) VALUES (?, ?)",
+        (image_uuid, int(time.time()))
+    )
+    conn.commit()
+
+
+def get_filtered_images() -> set[str]:
+    rows = get_cache_db().execute("SELECT image_uuid FROM filtered_images").fetchall()
+    return {row[0] for row in rows}
 
 
 def get_headers() -> dict:
@@ -192,6 +212,7 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
     """Download profile images from Barq."""
     headers = get_headers()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+    filtered_uuids = get_filtered_images() if classify_fn else set()
 
     async with aiohttp.ClientSession(headers=headers) as session:
         cursor = ""
@@ -239,7 +260,7 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                     folder_name = get_folder_name(p)
                     char_folder = Path(IMAGES_DIR) / folder_name
                     existing = get_existing_images(char_folder)
-                    new_uuids = [u for u in img_uuids if u not in existing]
+                    new_uuids = [u for u in img_uuids if u not in existing and u not in filtered_uuids]
 
                     if not new_uuids:
                         print(f"  {folder_name}: up to date ({len(existing)} images)")
@@ -256,6 +277,8 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                                     img = Image.open(dest)
                                     if not classify_fn(img):
                                         dest.unlink()
+                                        save_filtered_image(img_uuid)
+                                        filtered_uuids.add(img_uuid)
                                         print(f"  {folder_name}: {img_uuid}.jpg (filtered: not fursuit)")
                                         filtered += 1
                                         continue

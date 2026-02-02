@@ -38,5 +38,4 @@ class ImageClassifier:
         threshold: float = Config.DEFAULT_CLASSIFY_THRESHOLD,
     ) -> bool:
         scores = self.classify(image)
-        fursuit_score = sum(scores[l] for l in Config.CLASSIFY_FURSUIT_LABELS)
-        return fursuit_score >= threshold
+        return any(scores[l] >= threshold for l in Config.CLASSIFY_FURSUIT_LABELS)
