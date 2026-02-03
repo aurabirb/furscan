@@ -575,11 +575,28 @@ async def download_image(session: aiohttp.ClientSession, image_uuid: str, dest: 
         return False, status
 
 
+def score_and_filter_image(dest: Path, img_uuid: str, score_fn, threshold: float, filtered_uuids: set[str]) -> tuple[bool, float | None]:
+    """Score an image and delete if below threshold. Returns (kept, score)."""
+    from PIL import Image
+    try:
+        img = Image.open(dest)
+        score = score_fn(img)
+        save_filtered_image(img_uuid, score)
+        if score < threshold:
+            dest.unlink()
+            filtered_uuids.add(img_uuid)
+            return False, score
+        return True, score
+    except Exception:
+        return True, None  # Keep on error
+
+
 async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, all_images: bool = False, max_age: float | None = None, score_fn=None, threshold: float = 0.85, full_profile: bool = True):
     """Download profile images from Barq."""
     headers = get_headers()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
     filtered_uuids = get_filtered_images(threshold) if score_fn else set()
+    scored_uuids = set(get_all_classified_images().keys()) if score_fn else set()
     failed_uuids = get_failed_images()
 
     async with aiohttp.ClientSession(headers=headers) as session:
@@ -632,21 +649,14 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                     # Classify existing images that haven't been scored yet
                     if score_fn:
                         for img_uuid in img_uuids:
-                            if img_uuid in existing and img_uuid not in filtered_uuids:
+                            if img_uuid in existing and img_uuid not in scored_uuids:
                                 dest = char_folder / f"{img_uuid}.jpg"
-                                from PIL import Image
-                                try:
-                                    img = Image.open(dest)
-                                    score = score_fn(img)
-                                    save_filtered_image(img_uuid, score)  # Cache score for --clean
-                                    if score < threshold:
-                                        dest.unlink()
-                                        existing.discard(img_uuid)
-                                        filtered_uuids.add(img_uuid)
-                                        print(f"  {folder_name}: {img_uuid}.jpg (filtered existing: {score:.0%} < {threshold:.0%})")
-                                        filtered += 1
-                                except Exception:
-                                    pass
+                                kept, score = score_and_filter_image(dest, img_uuid, score_fn, threshold, filtered_uuids)
+                                scored_uuids.add(img_uuid)
+                                if not kept:
+                                    existing.discard(img_uuid)
+                                    print(f"  {folder_name}: {img_uuid}.jpg (filtered existing: {score:.0%} < {threshold:.0%})")
+                                    filtered += 1
 
                     new_uuids = [u for u in img_uuids if u not in existing and u not in filtered_uuids and u not in failed_uuids and u not in EXCLUDED_POST_IDS]
 
@@ -667,19 +677,12 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                             continue
 
                         if score_fn:
-                            from PIL import Image
-                            try:
-                                img = Image.open(dest)
-                                score = score_fn(img)
-                                save_filtered_image(img_uuid, score)  # Cache score for --clean
-                                if score < threshold:
-                                    dest.unlink()
-                                    filtered_uuids.add(img_uuid)
-                                    print(f"  {folder_name}: {img_uuid}.jpg (filtered: {score:.0%} < {threshold:.0%})")
-                                    filtered += 1
-                                    continue
-                            except Exception:
-                                pass
+                            kept, score = score_and_filter_image(dest, img_uuid, score_fn, threshold, filtered_uuids)
+                            scored_uuids.add(img_uuid)
+                            if not kept:
+                                print(f"  {folder_name}: {img_uuid}.jpg (filtered: {score:.0%} < {threshold:.0%})")
+                                filtered += 1
+                                continue
                         print(f"  {folder_name}: {img_uuid}.jpg")
                         total += 1
                         existing.add(img_uuid)
