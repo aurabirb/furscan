@@ -255,10 +255,14 @@ class SAM3FursuitIdentifier:
 
             if post_id in posts_need_seg:
                 # Check for existing masks
-                existing_masks = self.mask_storage.load_masks_for_post(
-                    post_id, source or "unknown",
-                    self.pipeline.segmentor_model_name,
-                    self.pipeline.segmentor_concept or "")
+                try:
+                    existing_masks = self.mask_storage.load_masks_for_post(
+                        post_id, source or "unknown",
+                        self.pipeline.segmentor_model_name,
+                        self.pipeline.segmentor_concept or "")
+                except Exception as e:
+                    print(f"[{i+1}/{total}] Failed to load masks for {filename}: {e}")
+                    existing_masks = []
 
                 if existing_masks:
                     proc_results = self.pipeline.process_with_masks(image, existing_masks)

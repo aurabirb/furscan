@@ -57,17 +57,6 @@ class MaskStorage:
         Image.fromarray(mask, mode="L").save(path, optimize=True)
         return str(path)
 
-    def load_mask(self, name: str, source: str, model: str, concept: str) -> Optional[np.ndarray]:
-        """Load a segmentation mask from file.
-
-        Returns:
-            Binary mask array (H, W) with values 0-255, or None if not found
-        """
-        path = self._get_mask_dir(source, model, concept) / f"{name}.png"
-        if not path.exists():
-            return None
-        return np.array(Image.open(path).convert("L"))
-
     def get_mask_path(self, name: str, source: str, model: str, concept: str) -> Path:
         """Get the full path for a mask file."""
         return self._get_mask_dir(source, model, concept) / f"{name}.png"
@@ -90,3 +79,9 @@ class MaskStorage:
             seg_idx = int(path.stem.split("_seg_")[-1])
             results.append((seg_idx, np.array(Image.open(path).convert("L"))))
         return results
+
+    def load_mask(self, name: str, source: str, model: str, concept: str) -> Optional[np.ndarray]:
+        path = self._get_mask_dir(source, model, concept) / f"{name}.png"
+        if not path.exists():
+            return None
+        return np.array(Image.open(path).convert("L"))
