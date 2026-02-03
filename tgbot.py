@@ -19,20 +19,10 @@ from telegram.ext import (
     filters,
 )
 
+import aitool
+import webserver
+
 load_dotenv()
-
-# Web server configuration
-WEB_HOST = os.environ.get("WEB_HOST", "0.0.0.0")
-WEB_PORT = int(os.environ.get("WEB_PORT", "8080"))
-STATIC_DIR = Path(__file__).parent / "static"
-
-# AI tool configuration (from environment variables with baked-in defaults)
-AITOOL_WORK_DIR = os.environ.get("AITOOL_WORK_DIR", os.path.abspath(os.path.join(os.path.dirname(__file__), "../../pursuit")))
-AITOOL_BINARY = os.environ.get("AITOOL_BINARY", "claude")
-AITOOL_ARGS = os.environ.get("AITOOL_ARGS", "--allowedTools 'Bash(git:*) Edit Write Read Glob Grep' -p")
-AITOOL_TIMEOUT = int(os.environ.get("AITOOL_TIMEOUT", "600"))  # 10 minutes default
-AITOOL_UPDATE_INTERVAL = float(os.environ.get("AITOOL_UPDATE_INTERVAL", "5.0"))  # seconds between updates
-AITOOL_ALLOWED_USERS = os.environ.get("AITOOL_ALLOWED_USERS", "")  # comma-separated list of telegram user IDs or usernames
 
 from sam3_pursuit import SAM3FursuitIdentifier, Config
 from sam3_pursuit.storage.database import SOURCE_TGBOT
@@ -395,196 +385,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-def is_user_authorized(update: Update) -> bool:
-    """Check if the user is authorized to use /aitool."""
-    if not AITOOL_ALLOWED_USERS:
-        return False  # No users configured = no access
-
-    allowed = [u.strip().lower() for u in AITOOL_ALLOWED_USERS.split(",") if u.strip()]
-    user = update.effective_user
-    if not user:
-        return False
-
-    # Check by user ID or username
-    user_id_str = str(user.id)
-    username = (user.username or "").lower()
-    print(f"username: {username} id: {user_id_str}")
-
-    return user_id_str in allowed or username in allowed
-
-
-async def aitool(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /aitool command - run AI tool with prompt and stream output.
-
-    Usage:
-        /aitool <prompt>       - Continue previous conversation with prompt
-        /aitool new <prompt>   - Start a new conversation with prompt
-    """
-    chat_id = update.effective_chat.id
-
-    # Check authorization
-    if not is_user_authorized(update):
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="❌ You are not authorized to use this command."
-        )
-        return
-
-    if not update.message or not context.args:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="Usage:\n  /aitool <prompt> - continue conversation\n  /aitool new <prompt> - start new conversation\n\nExample: /aitool fix the bug in main.py"
-        )
-        return
-
-    # Check for 'new' subcommand
-    args = list(context.args)
-    use_continue = True
-    if args and args[0].lower() == "new":
-        use_continue = False
-        args = args[1:]
-
-    if not args:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="❌ Please provide a prompt after 'new'."
-        )
-        return
-
-    prompt = " ".join(args)
-
-    # Send initial status
-    mode = "continuing" if use_continue else "new conversation"
-    status_msg = await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"🔧 Running: {AITOOL_BINARY} ({mode})\nPrompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}\n\n⏳ Starting..."
-    )
-
-    # Build command: claude --allowedTools '...' -p [-c] "prompt"
-    import shlex
-    cmd_parts = [AITOOL_BINARY] + shlex.split(AITOOL_ARGS)
-    if use_continue:
-        cmd_parts.append("-c")
-    cmd_parts.append(prompt)
-
-    work_dir = AITOOL_WORK_DIR if AITOOL_WORK_DIR else None
-
-    output_buffer = []
-    last_update_time = 0
-    process = None
-
-    try:
-        # Start the process
-        print(f"Starting prompt: {cmd_parts}")
-        process = await asyncio.create_subprocess_exec(
-            *cmd_parts,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=work_dir,
-        )
-
-        async def read_output():
-            """Read output from process and update buffer."""
-            nonlocal last_update_time
-            while True:
-                try:
-                    line = await asyncio.wait_for(
-                        process.stdout.readline(),
-                        timeout=1.0
-                    )
-                    if not line:
-                        break
-                    decoded = line.decode('utf-8', errors='replace').rstrip()
-                    if decoded:
-                        output_buffer.append(decoded)
-                except asyncio.TimeoutError:
-                    continue
-
-        async def send_updates():
-            """Periodically send output updates to user."""
-            nonlocal last_update_time
-            last_sent_len = 0
-            while process.returncode is None:
-                await asyncio.sleep(AITOOL_UPDATE_INTERVAL)
-                if len(output_buffer) > last_sent_len:
-                    # Get new lines since last update
-                    new_lines = output_buffer[last_sent_len:]
-                    last_sent_len = len(output_buffer)
-
-                    # Truncate if too long for Telegram (4096 char limit)
-                    text = "\n".join(new_lines)
-                    if len(text) > 3900:
-                        text = text[-3900:]
-                        text = "...(truncated)\n" + text
-
-                    try:
-                        await context.bot.send_message(chat_id=chat_id, text=f"📤 Output:\n```\n{text}\n```", parse_mode="Markdown")
-                    except Exception as e:
-                        # Fallback without markdown if it fails
-                        try:
-                            await context.bot.send_message(chat_id=chat_id, text=f"📤 Output:\n{text}")
-                        except Exception:
-                            pass
-
-        # Run both tasks with timeout
-        try:
-            read_task = asyncio.create_task(read_output())
-            update_task = asyncio.create_task(send_updates())
-
-            await asyncio.wait_for(read_task, timeout=AITOOL_TIMEOUT)
-            update_task.cancel()
-
-        except asyncio.TimeoutError:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"⚠️ Timeout after {AITOOL_TIMEOUT}s - terminating process..."
-            )
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                process.kill()
-
-        # Wait for process to complete
-        await process.wait()
-        return_code = process.returncode
-
-        # Send final output
-        if output_buffer:
-            final_output = "\n".join(output_buffer[-50:])  # Last 50 lines
-            if len(output_buffer) > 50:
-                final_output = f"...(showing last 50 of {len(output_buffer)} lines)\n" + final_output
-            if len(final_output) > 3900:
-                final_output = final_output[-3900:]
-
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ Completed (exit code: {return_code})\n\n📄 Final output:\n```\n{final_output}\n```",
-                parse_mode="Markdown"
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ Completed (exit code: {return_code})\n\n(no output)"
-            )
-
-    except FileNotFoundError:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"❌ Error: Binary '{AITOOL_BINARY}' not found. Make sure it's installed and in PATH."
-        )
-    except Exception as e:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"❌ Error: {e}"
-        )
-    finally:
-        if process and process.returncode is None:
-            try:
-                process.kill()
-            except Exception:
-                pass
-
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /restart command - restart the bot process."""
     await context.bot.send_message(
@@ -670,26 +470,6 @@ async def commit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# Web server setup
-async def web_index_handler(request: web.Request) -> web.FileResponse:
-    """Serve index.html for the root path."""
-    return web.FileResponse(STATIC_DIR / "index.html")
-
-
-def create_web_app() -> web.Application:
-    """Create and configure the aiohttp web application."""
-    app = web.Application()
-    app.router.add_get("/", web_index_handler)
-    app.router.add_static("/static/", STATIC_DIR, name="static")
-    return app
-
-
-async def run_web_server(runner: web.AppRunner):
-    """Run the web server."""
-    await runner.setup()
-    site = web.TCPSite(runner, WEB_HOST, WEB_PORT)
-    await site.start()
-    print(f"Web server running at http://{WEB_HOST}:{WEB_PORT}")
 
 
 async def debug_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -717,7 +497,7 @@ def build_application(token: str):
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("whodis", whodis))
     app.add_handler(CommandHandler("furspy", whodis))
-    app.add_handler(CommandHandler("aitool", aitool))
+    app.add_handler(CommandHandler("aitool", aitool.handle_aitool))
     app.add_handler(CommandHandler("restart", restart))
     app.add_handler(CommandHandler("commit", commit))
     return app
@@ -732,17 +512,17 @@ async def run_bot_and_web():
         print("Error: TG_BOT_TOKEN or TG_BOT_TOKENS not set", file=sys.stderr)
         sys.exit(1)
 
-    if not STATIC_DIR.exists():
-        STATIC_DIR.mkdir(parents=True)
+    if not webserver.STATIC_DIR.exists():
+        webserver.STATIC_DIR.mkdir(parents=True)
 
     applications = [build_application(token) for token in tokens]
 
-    web_app = create_web_app()
+    web_app = webserver.create_app()
     web_runner = web.AppRunner(web_app)
 
     print(f"Starting {len(applications)} bot(s) and web server...")
 
-    await run_web_server(web_runner)
+    await webserver.start_server(web_runner)
 
     for app in applications:
         await app.initialize()
