@@ -596,7 +596,7 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
     headers = get_headers()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
     filtered_uuids = get_filtered_images(threshold) if score_fn else set()
-    scored_uuids = set(get_all_classified_images().keys()) if score_fn else set()
+    cached_scores = get_all_classified_images() if score_fn else {}  # uuid -> score
     failed_uuids = get_failed_images()
 
     async with aiohttp.ClientSession(headers=headers) as session:
@@ -604,6 +604,7 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
         total = 0
         skipped = 0
         filtered = 0
+        restored = 0
 
         for page in range(max_pages):
             if page > 0:
@@ -649,10 +650,11 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                     # Classify existing images that haven't been scored yet
                     if score_fn:
                         for img_uuid in img_uuids:
-                            if img_uuid in existing and img_uuid not in scored_uuids:
+                            if img_uuid in existing and img_uuid not in cached_scores:
                                 dest = char_folder / f"{img_uuid}.jpg"
                                 kept, score = score_and_filter_image(dest, img_uuid, score_fn, threshold, filtered_uuids)
-                                scored_uuids.add(img_uuid)
+                                if score is not None:
+                                    cached_scores[img_uuid] = score
                                 if not kept:
                                     existing.discard(img_uuid)
                                     print(f"  {folder_name}: {img_uuid}.jpg (filtered existing: {score:.0%} < {threshold:.0%})")
@@ -677,13 +679,22 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                             continue
 
                         if score_fn:
-                            kept, score = score_and_filter_image(dest, img_uuid, score_fn, threshold, filtered_uuids)
-                            scored_uuids.add(img_uuid)
-                            if not kept:
-                                print(f"  {folder_name}: {img_uuid}.jpg (filtered: {score:.0%} < {threshold:.0%})")
-                                filtered += 1
-                                continue
-                        print(f"  {folder_name}: {img_uuid}.jpg")
+                            # Check if we have a cached score that passes threshold (restoring previously filtered image)
+                            if img_uuid in cached_scores:
+                                cached_score = cached_scores[img_uuid]
+                                print(f"  {folder_name}: {img_uuid}.jpg (restored, cached score: {cached_score:.0%})")
+                                restored += 1
+                            else:
+                                kept, score = score_and_filter_image(dest, img_uuid, score_fn, threshold, filtered_uuids)
+                                if score is not None:
+                                    cached_scores[img_uuid] = score
+                                if not kept:
+                                    print(f"  {folder_name}: {img_uuid}.jpg (filtered: {score:.0%} < {threshold:.0%})")
+                                    filtered += 1
+                                    continue
+                                print(f"  {folder_name}: {img_uuid}.jpg (score: {score:.0%})")
+                        else:
+                            print(f"  {folder_name}: {img_uuid}.jpg")
                         total += 1
                         existing.add(img_uuid)
                 except Exception as e:
@@ -694,9 +705,10 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
 
         # Clean up empty directories left by filtering
         removed_dirs = clean_empty_dirs()
+        restored_msg = f", restored: {restored}" if restored else ""
         filter_msg = f", filtered (not fursuit): {filtered}" if filtered else ""
         empty_msg = f", removed {removed_dirs} empty directories" if removed_dirs else ""
-        print(f"\nTotal downloaded: {total}, skipped (cached): {skipped}{filter_msg}{empty_msg}")
+        print(f"\nTotal downloaded: {total}, skipped (cached): {skipped}{restored_msg}{filter_msg}{empty_msg}")
 
 
 def main():
