@@ -9,7 +9,7 @@ from tempfile import NamedTemporaryFile
 
 from aiohttp import web
 from dotenv import load_dotenv
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -25,6 +25,7 @@ import webserver
 load_dotenv()
 
 from sam3_pursuit import SAM3FursuitIdentifier, Config
+from sam3_pursuit.api.annotator import annotate_image
 from sam3_pursuit.storage.database import SOURCE_TGBOT
 
 # Pattern to match "character:Name" in caption
@@ -32,113 +33,6 @@ CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
 
 # Global identifier instance (lazy loaded)
 _identifier = None
-
-# Distinct colors for bounding boxes
-BOX_COLORS = [
-    "#FF0000",  # Red
-    "#00FF00",  # Green
-    "#0000FF",  # Blue
-    "#FFFF00",  # Yellow
-    "#FF00FF",  # Magenta
-    "#00FFFF",  # Cyan
-    "#FFA500",  # Orange
-    "#800080",  # Purple
-    "#00FF7F",  # Spring Green
-    "#FF69B4",  # Hot Pink
-]
-
-
-def get_git_version() -> str:
-    """Get the current git short hash."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            timeout=5,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return "unknown"
-
-
-def annotate_image(image: Image.Image, results: list, min_confidence: float) -> Image.Image:
-    """Draw bounding boxes, character names, and version watermark on the image."""
-    img_rgb = image.convert("RGB")
-
-    # Get git version for watermark
-    git_version = get_git_version()
-    watermark_text = f"Pursuit {git_version}"
-
-    # Try to load fonts, fall back to default
-    font_paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-    ]
-    font = None
-    watermark_font = None
-    for font_path in font_paths:
-        try:
-            font = ImageFont.truetype(font_path, 32)
-            watermark_font = ImageFont.truetype(font_path, 20)
-            break
-        except (OSError, IOError):
-            continue
-    if font is None:
-        font = ImageFont.load_default()
-        watermark_font = font
-
-    # Calculate watermark bar height
-    temp_draw = ImageDraw.Draw(img_rgb)
-    wm_bbox = temp_draw.textbbox((0, 0), watermark_text, font=watermark_font)
-    wm_text_h = wm_bbox[3] - wm_bbox[1]
-    bar_height = wm_text_h + 16  # padding
-
-    # Create new image with watermark bar at bottom
-    annotated = Image.new("RGB", (img_rgb.width, img_rgb.height + bar_height), "black")
-    annotated.paste(img_rgb, (0, 0))
-    draw = ImageDraw.Draw(annotated)
-
-    # Draw bounding boxes and labels for each segment
-    for i, result in enumerate(results):
-        x, y, w, h = result.segment_bbox
-        color = BOX_COLORS[i % len(BOX_COLORS)]
-
-        # Filter matches by confidence
-        filtered_matches = [m for m in result.matches if m.confidence >= min_confidence]
-
-        # Get top character name
-        if filtered_matches:
-            name = filtered_matches[0].character_name or "Unknown"
-            conf = filtered_matches[0].confidence
-            label = f"{name} ({conf:.0%})"
-        else:
-            label = "No match"
-
-        # Draw rectangle with distinct color
-        draw.rectangle([x, y, x + w, y + h], outline=color, width=4)
-
-        # Draw label background and text above the box
-        text_bbox = draw.textbbox((0, 0), label, font=font)
-        text_w = text_bbox[2] - text_bbox[0]
-        text_h = text_bbox[3] - text_bbox[1]
-        label_y = max(0, y - text_h - 8)
-        draw.rectangle([x, label_y, x + text_w + 12, label_y + text_h + 6], fill=color)
-        draw.text((x + 6, label_y + 3), label, fill="white", font=font)
-
-    # Draw watermark text centered in the black bar
-    wm_bbox = draw.textbbox((0, 0), watermark_text, font=watermark_font)
-    wm_text_w = wm_bbox[2] - wm_bbox[0]
-    wm_x = (annotated.width - wm_text_w) // 2
-    wm_y = img_rgb.height + (bar_height - wm_text_h) // 2
-    draw.text((wm_x, wm_y), watermark_text, fill="white", font=watermark_font)
-
-    return annotated
 
 
 def get_identifier() -> SAM3FursuitIdentifier:
@@ -178,7 +72,6 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await identify_photo(update, context)
 
 async def download_tg_file(new_file):
-    from pathlib import Path
     os.makedirs("tg_download", exist_ok=True)
     temp_path = Path("tg_download") / f"{new_file.file_id}.jpg"
     print(f"Downloading into {temp_path}")
@@ -399,79 +292,6 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
-async def commit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /commit command - git add, commit and push changes."""
-    import subprocess
-
-    # Get commit message from command arguments, or use default
-    commit_msg = " ".join(context.args) if context.args else "Update from bot"
-
-    try:
-        # Get the working directory (where tgbot.py is located)
-        working_dir = os.path.dirname(os.path.abspath(__file__)) or "."
-
-        # Git add all changes
-        result = subprocess.run(
-            ["git", "add", "-A"],
-            cwd=working_dir,
-            capture_output=True,
-            text=True
-        )
-        if result.returncode != 0:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"git add failed: {result.stderr}"
-            )
-            return
-
-        # Git commit
-        result = subprocess.run(
-            ["git", "commit", "-m", commit_msg],
-            cwd=working_dir,
-            capture_output=True,
-            text=True
-        )
-        if result.returncode != 0:
-            if "nothing to commit" in result.stdout or "nothing to commit" in result.stderr:
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text="Nothing to commit."
-                )
-                return
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"git commit failed: {result.stderr}"
-            )
-            return
-
-        # Git push
-        result = subprocess.run(
-            ["git", "push"],
-            cwd=working_dir,
-            capture_output=True,
-            text=True
-        )
-        if result.returncode != 0:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"git push failed: {result.stderr}"
-            )
-            return
-
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"Changes committed and pushed.\nMessage: {commit_msg}"
-        )
-
-    except Exception as e:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"Error: {e}"
-        )
-
-
-
-
 async def debug_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Debug handler to log all incoming messages."""
     msg = update.message
@@ -499,7 +319,7 @@ def build_application(token: str):
     app.add_handler(CommandHandler("furspy", whodis))
     app.add_handler(CommandHandler("aitool", aitool.handle_aitool))
     app.add_handler(CommandHandler("restart", restart))
-    app.add_handler(CommandHandler("commit", commit))
+    app.add_handler(CommandHandler("commit", aitool.handle_commit))
     return app
 
 

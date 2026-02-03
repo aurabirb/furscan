@@ -3,6 +3,7 @@
 import asyncio
 import os
 import shlex
+import subprocess
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -217,3 +218,71 @@ async def handle_aitool(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 process.kill()
             except Exception:
                 pass
+
+
+async def handle_commit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /commit command - git add, commit and push changes."""
+    chat_id = update.effective_chat.id
+
+    # Get commit message from command arguments, or use default
+    commit_msg = " ".join(context.args) if context.args else "Update from bot"
+
+    try:
+        # Git add all changes
+        result = subprocess.run(
+            ["git", "add", "-A"],
+            cwd=WORK_DIR,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"git add failed: {result.stderr}"
+            )
+            return
+
+        # Git commit
+        result = subprocess.run(
+            ["git", "commit", "-m", commit_msg],
+            cwd=WORK_DIR,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            if "nothing to commit" in result.stdout or "nothing to commit" in result.stderr:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="Nothing to commit."
+                )
+                return
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"git commit failed: {result.stderr}"
+            )
+            return
+
+        # Git push
+        result = subprocess.run(
+            ["git", "push"],
+            cwd=WORK_DIR,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"git push failed: {result.stderr}"
+            )
+            return
+
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Changes committed and pushed.\nMessage: {commit_msg}"
+        )
+
+    except Exception as e:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Error: {e}"
+        )
