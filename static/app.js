@@ -28,6 +28,12 @@ let results = [];
 let startTime = null;
 let threshold = 50;
 
+// File System Access API state
+let directoryHandle = null;
+let monitorInterval = null;
+const MONITOR_INTERVAL_MS = 5000; // Check for new files every 5 seconds
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+
 // DOM elements
 const fileInput = document.getElementById('fileInput');
 const fileCount = document.getElementById('fileCount');
@@ -50,12 +56,29 @@ const resumeBtn = document.getElementById('resumeBtn');
 const clearResumeBtn = document.getElementById('clearResumeBtn');
 const resumeCount = document.getElementById('resumeCount');
 const clearResultsBtn = document.getElementById('clearResultsBtn');
+const selectFolderBtn = document.getElementById('selectFolderBtn');
+const folderMonitor = document.getElementById('folderMonitor');
+const folderPath = document.getElementById('folderPath');
+const monitorStatus = document.getElementById('monitorStatus');
+const autoMonitor = document.getElementById('autoMonitor');
+const refreshFolderBtn = document.getElementById('refreshFolderBtn');
+const clearFolderBtn = document.getElementById('clearFolderBtn');
+const apiWarning = document.getElementById('apiWarning');
 
 // Initialize
 async function init() {
     loadState();
     setupEventListeners();
+    checkFileSystemAPISupport();
     await loadModel();
+}
+
+function checkFileSystemAPISupport() {
+    if (!('showDirectoryPicker' in window)) {
+        selectFolderBtn.disabled = true;
+        selectFolderBtn.title = 'File System Access API not supported';
+        apiWarning.classList.add('active');
+    }
 }
 
 function setupEventListeners() {
@@ -66,6 +89,10 @@ function setupEventListeners() {
     resumeBtn.addEventListener('click', resumeScan);
     clearResumeBtn.addEventListener('click', clearAndStartFresh);
     clearResultsBtn.addEventListener('click', clearAllResults);
+    selectFolderBtn.addEventListener('click', handleSelectFolder);
+    refreshFolderBtn.addEventListener('click', refreshFolder);
+    clearFolderBtn.addEventListener('click', clearFolder);
+    autoMonitor.addEventListener('change', handleAutoMonitorToggle);
 }
 
 async function loadModel() {
@@ -100,6 +127,13 @@ async function loadModel() {
 }
 
 function handleFileSelect(e) {
+    // Clear folder mode when selecting individual files
+    if (directoryHandle) {
+        directoryHandle = null;
+        folderMonitor.classList.remove('active');
+        stopMonitoring();
+    }
+
     files = Array.from(e.target.files);
     fileCount.textContent = `${files.length} files selected`;
     startBtn.disabled = files.length === 0 || !classifier;
@@ -391,6 +425,127 @@ function loadState() {
     } catch (e) {
         console.error('Error loading state:', e);
     }
+}
+
+// File System Access API functions
+async function handleSelectFolder() {
+    try {
+        directoryHandle = await window.showDirectoryPicker({
+            mode: 'read'
+        });
+
+        folderPath.textContent = directoryHandle.name;
+        folderMonitor.classList.add('active');
+
+        await refreshFolder();
+    } catch (err) {
+        if (err.name !== 'AbortError') {
+            console.error('Error selecting folder:', err);
+        }
+    }
+}
+
+async function refreshFolder() {
+    if (!directoryHandle) return;
+
+    monitorStatus.textContent = 'Scanning...';
+
+    try {
+        const imageFiles = await getImageFilesFromDirectory(directoryHandle);
+        files = imageFiles;
+        fileCount.textContent = `${files.length} files in folder`;
+        startBtn.disabled = files.length === 0 || !classifier;
+
+        // Check for resumable state
+        const savedFiles = files.map(f => f.name);
+        const canResume = results.some(r => savedFiles.includes(r.name));
+
+        if (canResume && processedFiles.size > 0) {
+            resumeBanner.classList.add('active');
+            resumeCount.textContent = processedFiles.size;
+        } else {
+            resumeBanner.classList.remove('active');
+        }
+
+        const newCount = files.filter(f => !processedFiles.has(f.name)).length;
+        monitorStatus.textContent = autoMonitor.checked
+            ? `Watching (${newCount} new)`
+            : `${newCount} unprocessed`;
+
+    } catch (err) {
+        console.error('Error reading folder:', err);
+        monitorStatus.textContent = 'Error reading folder';
+    }
+}
+
+async function getImageFilesFromDirectory(dirHandle, path = '') {
+    const files = [];
+
+    for await (const entry of dirHandle.values()) {
+        if (entry.kind === 'file') {
+            const name = entry.name.toLowerCase();
+            if (IMAGE_EXTENSIONS.some(ext => name.endsWith(ext))) {
+                const file = await entry.getFile();
+                // Attach relative path for display
+                file.relativePath = path ? `${path}/${entry.name}` : entry.name;
+                files.push(file);
+            }
+        } else if (entry.kind === 'directory') {
+            // Recursively scan subdirectories
+            const subPath = path ? `${path}/${entry.name}` : entry.name;
+            const subFiles = await getImageFilesFromDirectory(entry, subPath);
+            files.push(...subFiles);
+        }
+    }
+
+    return files;
+}
+
+function clearFolder() {
+    directoryHandle = null;
+    files = [];
+    folderMonitor.classList.remove('active');
+    folderPath.textContent = '';
+    monitorStatus.textContent = '';
+    fileCount.textContent = 'No files selected';
+    startBtn.disabled = true;
+    stopMonitoring();
+}
+
+function handleAutoMonitorToggle(e) {
+    if (e.target.checked) {
+        startMonitoring();
+    } else {
+        stopMonitoring();
+    }
+}
+
+function startMonitoring() {
+    if (monitorInterval) return;
+
+    monitorStatus.classList.add('watching');
+    monitorInterval = setInterval(async () => {
+        if (!directoryHandle || isRunning) return;
+
+        const prevCount = files.length;
+        await refreshFolder();
+
+        // Auto-start scan if new files found and not running
+        const newFiles = files.filter(f => !processedFiles.has(f.name));
+        if (newFiles.length > 0 && files.length > prevCount && classifier && !isRunning) {
+            // New files detected - could auto-start here if desired
+            monitorStatus.textContent = `Watching (${newFiles.length} new files detected)`;
+        }
+    }, MONITOR_INTERVAL_MS);
+}
+
+function stopMonitoring() {
+    if (monitorInterval) {
+        clearInterval(monitorInterval);
+        monitorInterval = null;
+    }
+    monitorStatus.classList.remove('watching');
+    autoMonitor.checked = false;
 }
 
 // Start the app

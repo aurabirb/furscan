@@ -28,6 +28,9 @@ pursuit_masks/
 tg_download/
 static/models/
 
+# SSL certificates
+certs/
+
 # Backups
 *.bak
 
