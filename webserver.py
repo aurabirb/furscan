@@ -55,10 +55,15 @@ def create_ssl_context() -> ssl.SSLContext | None:
     return ssl_context
 
 
-def create_app(static_dir: Path = None) -> web.Application:
-    static = static_dir or STATIC_DIR
+async def index_handler(request: web.Request) -> web.FileResponse:
+    """Serve index.html for the root path."""
+    return web.FileResponse(STATIC_DIR / "index.html")
+
+
+def create_app() -> web.Application:
     app = web.Application()
-    app.router.add_static("/", static, name="static")
+    app.router.add_get("/", index_handler)
+    app.router.add_static("/", STATIC_DIR, name="static")
     return app
 
 
