@@ -485,26 +485,55 @@ def get_headers() -> dict:
     }
 
 
+_PLACEHOLDER_NAMES = {"likes only", "liked only", "private", "mutuals only"}
+
+
+def _is_placeholder_name(name: str) -> bool:
+    """Check if a name is a placeholder rather than a real character name."""
+    return name.lower().strip() in _PLACEHOLDER_NAMES
+
+
+USE_SONA_NAMES = False  # Use fursuit character (sona) names instead of display names
+
+
 def get_folder_name(profile: dict) -> str:
     """Get folder name as {id}.{readable_name}."""
     pid = profile.get("id") or profile.get("uuid")
 
     # Try username first
     name = profile.get("username")
+    if name and _is_placeholder_name(name):
+        name = None
 
     # Try social accounts: prefer twitter, then telegram
     if not name:
         socials = profile.get("socialAccounts") or []
-        # Filter out private/mutuals-only
+        # Filter out private/mutuals-only/liked-only
         valid = [s for s in socials if not _is_private_social(s)]
         # Sort by preference
         priority = {"twitter": 0, "telegram": 1, "furAffinity": 2}
         valid.sort(key=lambda s: priority.get(s.get("socialNetwork"), 99))
         if valid:
-            name = valid[0].get("value", "").lstrip("@")
+            val = valid[0].get("value", "").lstrip("@")
+            if val and not _is_placeholder_name(val):
+                name = val
 
+    # Optionally try sona name (character/fursona name from profile)
+    if not name and USE_SONA_NAMES:
+        sonas = profile.get("sonas") or []
+        for sona in sonas:
+            sona_name = sona.get("displayName")
+            if sona_name and not _is_placeholder_name(sona_name):
+                name = sona_name
+                break
+
+    # Fall back to displayName or UUID
     if not name:
-        name = profile.get("displayName") or profile.get("uuid", "unknown")
+        display = profile.get("displayName")
+        if display and not _is_placeholder_name(display):
+            name = display
+        else:
+            name = profile.get("uuid", "unknown")
 
     # Sanitize
     name = name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("\0", "").replace("|", "_")
@@ -512,8 +541,12 @@ def get_folder_name(profile: dict) -> str:
 
 
 def _is_private_social(social: dict) -> bool:
-    val = (social.get("value") or "").lower()
-    return val in ("private", "@private") or val.endswith("mutuals only")
+    val = (social.get("value") or "").lower().strip()
+    if val in ("private", "@private", "likes only", "@likes only", "liked only", "@liked only"):
+        return True
+    if val.endswith("mutuals only") or val.endswith("likes only") or val.endswith("liked only"):
+        return True
+    return False
 
 
 def get_existing_images(char_folder: Path) -> set[str]:

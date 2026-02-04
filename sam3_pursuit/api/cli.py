@@ -535,6 +535,23 @@ def ingest_from_barq(args):
 
     total_added = 0
 
+    # Names that are placeholders from Barq's API (not real character names)
+    placeholder_names = {"likes only", "liked only", "private", "mutuals only"}
+
+    def _resolve_barq_name(profile_id: str, fallback: str) -> str:
+        """Try to resolve a better name from barq cache for placeholder names."""
+        try:
+            from download_barq import get_cached_profile, get_folder_name
+            cached = get_cached_profile(profile_id)
+            if cached:
+                # Re-resolve using updated logic
+                resolved = get_folder_name(cached).split(".", 1)[1]
+                if resolved.lower().strip() not in placeholder_names:
+                    return resolved
+        except Exception:
+            pass
+        return profile_id  # Fall back to profile ID
+
     def get_images():
         # Iterate directories matching pattern: {profile_id}.{name}
         for char_dir in sorted(data_dir.iterdir()):
@@ -547,6 +564,14 @@ def ingest_from_barq(args):
                 continue
 
             character_name = dir_name.split(".", 1)[1]
+
+            # Handle placeholder names from Barq API
+            if character_name.lower().strip() in placeholder_names:
+                profile_id = dir_name.split(".", 1)[0]
+                old_name = character_name
+                character_name = _resolve_barq_name(profile_id, character_name)
+                print(f"Resolved placeholder name '{old_name}' -> '{character_name}'")
+
             images = list(char_dir.glob("*.jpg")) + list(char_dir.glob("*.png")) + list(char_dir.glob("*.jpeg"))
 
             if args.limit:
