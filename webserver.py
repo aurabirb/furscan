@@ -3,6 +3,7 @@
 import os
 import ssl
 import subprocess
+import urllib.request
 from pathlib import Path
 
 from aiohttp import web
@@ -15,6 +16,39 @@ STATIC_DIR = Path(__file__).parent / "static"
 CERTS_DIR = Path(__file__).parent / "certs"
 CERT_FILE = CERTS_DIR / "localhost.crt"
 KEY_FILE = CERTS_DIR / "localhost.key"
+
+# CLIP model for transformers.js
+CLIP_MODEL_DIR = STATIC_DIR / "models" / "clip-vit-base-patch32"
+CLIP_MODEL_FILES = [
+    "config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "preprocessor_config.json",
+    "onnx/text_model_quantized.onnx",
+    "onnx/vision_model_quantized.onnx",
+    "onnx/model_quantized.onnx",
+]
+CLIP_MODEL_BASE_URL = "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main"
+
+
+def download_clip_model() -> None:
+    """Download CLIP model files for transformers.js if missing."""
+    if all((CLIP_MODEL_DIR / f).exists() for f in CLIP_MODEL_FILES):
+        return
+
+    print("Downloading CLIP model for transformers.js...")
+    (CLIP_MODEL_DIR / "onnx").mkdir(parents=True, exist_ok=True)
+
+    for filename in CLIP_MODEL_FILES:
+        filepath = CLIP_MODEL_DIR / filename
+        if filepath.exists():
+            continue
+
+        url = f"{CLIP_MODEL_BASE_URL}/{filename}"
+        print(f"  Downloading {filename}...")
+        urllib.request.urlretrieve(url, filepath)
+
+    print("CLIP model download complete.")
 
 
 def generate_self_signed_cert() -> None:
@@ -108,6 +142,7 @@ def run_standalone() -> None:
         STATIC_DIR.mkdir(parents=True)
         print(f"Created static directory: {STATIC_DIR}")
 
+    download_clip_model()
     ssl_context = create_ssl_context()
 
     app = create_app()
