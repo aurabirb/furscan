@@ -8,9 +8,9 @@
     <meta name="theme-color" content="#a855f7">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="manifest" href="/static/manifest.json">
-    <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
-    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
     <style>
         * {
             box-sizing: border-box;
@@ -395,10 +395,10 @@
         <button class="btn btn-secondary" id="clearResultsBtn">Clear All Results</button>
     </div>
 
-    <script type="module" src="/static/app.js"></script>
+    <script type="module" src="app.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/static/sw.js')
+            navigator.serviceWorker.register('sw.js')
                 .then(() => console.log('Service Worker registered'))
                 .catch((err) => console.warn('Service Worker registration failed:', err));
         }

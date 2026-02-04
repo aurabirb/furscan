@@ -1,8 +1,9 @@
 const CACHE_NAME = 'fursuit-scanner-v1';
 const STATIC_ASSETS = [
     '/',
-    '/static/app.js',
-    '/static/manifest.json',
+    'index.html',
+    'app.js',
+    'manifest.json',
 ];
 
 // Install - cache static assets

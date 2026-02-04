@@ -5,7 +5,7 @@
 import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
 
 // Use local models instead of Hugging Face
-env.localModelPath = '/static/models/';
+env.localModelPath = 'models/';
 env.allowRemoteModels = false;
 
 const STORAGE_KEY = 'fursuit_scanner_state';

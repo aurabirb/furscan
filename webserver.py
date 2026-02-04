@@ -55,21 +55,10 @@ def create_ssl_context() -> ssl.SSLContext | None:
     return ssl_context
 
 
-async def index_handler(request: web.Request) -> web.FileResponse:
-    """Serve index.html for the root path."""
-    return web.FileResponse(STATIC_DIR / "index.html")
-
-
 def create_app(static_dir: Path = None) -> web.Application:
-    """Create and configure the aiohttp web application.
-
-    Args:
-        static_dir: Optional path to static files directory. Defaults to ./static/
-    """
     static = static_dir or STATIC_DIR
     app = web.Application()
-    app.router.add_get("/", index_handler)
-    app.router.add_static("/static/", static, name="static")
+    app.router.add_static("/", static, name="static")
     return app
 
 
