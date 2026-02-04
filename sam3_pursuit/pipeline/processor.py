@@ -27,9 +27,11 @@ class ProcessingPipeline:
         isolation_config: Optional[IsolationConfig] = None,
         segmentor_model_name: Optional[str] = None,
         segmentor_concept: Optional[str] = None,
+        segmentor_device: Optional[str] = None,
     ):
         self.device = device or Config.get_device()
-        self.segmentor = FursuitSegmentor(device=self.device, concept=segmentor_concept) if segmentor_model_name else FullImageSegmentor()
+        self.segmentor_device = segmentor_device or Config.get_segmentor_device()
+        self.segmentor = FursuitSegmentor(device=self.segmentor_device, concept=segmentor_concept) if segmentor_model_name else FullImageSegmentor()
         self.segmentor_concept = segmentor_concept
         self.embedder = FursuitEmbedder(device=self.device, model_name=embedder_model_name)
         self.isolator = BackgroundIsolator(isolation_config)

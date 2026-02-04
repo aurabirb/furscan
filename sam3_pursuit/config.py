@@ -27,6 +27,7 @@ class Config:
     IMAGES_DIR = os.path.join(BASE_DIR, "furtrack_images")
 
     # Models
+    SAM3_VRAM_REQUIRED_GB = 4  # SAM3 needs ~4GB VRAM
     SAM3_MODEL = "sam3"
     DINOV2_MODEL = "facebook/dinov2-base"
     CLIP_MODEL = "openai/clip-vit-base-patch32"
@@ -66,13 +67,24 @@ class Config:
     def get_device() -> str:
         if torch.cuda.is_available():
             cap = torch.cuda.get_device_capability()
-            if cap >= (7, 0):
+            if cap >= (6, 0):
                 return "cuda"
         if torch.backends.mps.is_available():
             os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
             os.environ['FAISS_OPT_LEVEL'] = ''
             return "mps"
         return "cpu"
+
+    @classmethod
+    def get_segmentor_device(cls) -> str:
+        """Get device for SAM3 segmentor. Falls back to CPU if not enough VRAM."""
+        device = cls.get_device()
+        if device == "cuda":
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            if total_vram_gb < cls.SAM3_VRAM_REQUIRED_GB:
+                print(f"GPU has {total_vram_gb:.1f}GB VRAM, SAM3 needs ~{cls.SAM3_VRAM_REQUIRED_GB}GB. Using CPU for segmentation.")
+                return "cpu"
+        return device
 
     @classmethod
     def get_absolute_path(cls, relative_path: str) -> str:
