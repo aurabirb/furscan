@@ -2,10 +2,10 @@
 name = "sam3-pursuit"
 version = "1.0.0"
 description = "Fursuit character recognition using SAM3 and DINOv2"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 dependencies = [
-    "torch>=2.0",
-    "torchvision>=0.15",
+    "torch==2.5.1",
+    "torchvision==0.20.1",
     "ultralytics>=8.3.0",
     "transformers>=4.40.0",
     "faiss-cpu>=1.7.4",
@@ -27,3 +27,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["sam3_pursuit*"]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
