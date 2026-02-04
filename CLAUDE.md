@@ -64,8 +64,8 @@ Or manually download `sam3.pt` from https://huggingface.co/facebook/sam3 and pla
 
 ```bash
 python -c "
-from sam3_pursuit.models.segmentor import FursuitSegmentor
-s = FursuitSegmentor()
+from sam3_pursuit.models.segmentor import SAM3FursuitSegmentor
+s = SAM3FursuitSegmentor()
 print('SAM3 ready!')
 "
 ```
@@ -207,12 +207,12 @@ python tgbot.py
 ## Python API
 
 ```python
-from sam3_pursuit import SAM3FursuitIdentifier
+from sam3_pursuit import FursuitIdentifier
 from sam3_pursuit.models.preprocessor import IsolationConfig
 from PIL import Image
 
 # Initialize with default settings (loads SAM3 + DINOv2)
-identifier = SAM3FursuitIdentifier()
+identifier = FursuitIdentifier()
 
 # Or customize background isolation
 isolation_config = IsolationConfig(
@@ -220,7 +220,7 @@ isolation_config = IsolationConfig(
     background_color=(128, 128, 128),  # Gray background
     blur_radius=25                   # For blur mode
 )
-identifier = SAM3FursuitIdentifier(isolation_config=isolation_config)
+identifier = FursuitIdentifier(isolation_config=isolation_config)
 
 # Identify character in image
 image = Image.open("photo.jpg")
@@ -242,10 +242,10 @@ print(f"Database contains {stats['unique_characters']} characters")
 ### Using the segmentor directly
 
 ```python
-from sam3_pursuit.models.segmentor import FursuitSegmentor
+from sam3_pursuit.models.segmentor import SAM3FursuitSegmentor
 from PIL import Image
 
-segmentor = FursuitSegmentor()
+segmentor = SAM3FursuitSegmentor()
 image = Image.open("photo.jpg")
 
 # Segment with default concept ("fursuiter")
@@ -348,9 +348,9 @@ pursuit/
 ├── sam3_pursuit/           # Main package
 │   ├── api/
 │   │   ├── cli.py          # Command-line interface
-│   │   └── identifier.py   # Main API: SAM3FursuitIdentifier
+│   │   └── identifier.py   # Main API: FursuitIdentifier
 │   ├── models/
-│   │   ├── segmentor.py    # SAM3 segmentation (FursuitSegmentor, FullImageSegmentor)
+│   │   ├── segmentor.py    # SAM3 segmentation (SAM3FursuitSegmentor, FullImageSegmentor)
 │   │   ├── embedder.py     # DINOv2 embeddings (FursuitEmbedder)
 │   │   └── preprocessor.py # Background isolation (BackgroundIsolator, IsolationConfig)
 │   ├── pipeline/
@@ -480,7 +480,7 @@ Automatic device selection: CUDA → MPS → CPU
 
 Force specific device:
 ```python
-identifier = SAM3FursuitIdentifier(device="cuda")  # or "cpu", "mps"
+identifier = FursuitIdentifier(device="cuda")  # or "cpu", "mps"
 ```
 
 ## References

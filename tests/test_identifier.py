@@ -286,8 +286,8 @@ class TestIdentification(unittest.TestCase):
         cls.skip_reason = None
 
         # Load identifier once for all tests
-        from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
-        cls.identifier = SAM3FursuitIdentifier(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
+        from sam3_pursuit.api.identifier import FursuitIdentifier
+        cls.identifier = FursuitIdentifier(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
 
     def setUp(self):
         """Skip test if database not available."""
@@ -312,10 +312,10 @@ class TestIdentification(unittest.TestCase):
 
     def test_segmentation_detects_multiple_fursuiters(self):
         """Test that segmentation finds multiple fursuiters in 3furs.jpg."""
-        from sam3_pursuit.models.segmentor import FursuitSegmentor
+        from sam3_pursuit.models.segmentor import SAM3FursuitSegmentor
 
         image = Image.open(self.MULTI_FUR_IMAGE)
-        segmentor = FursuitSegmentor()
+        segmentor = SAM3FursuitSegmentor()
 
         results = segmentor.segment(image)
 
@@ -358,12 +358,12 @@ class TestIdentification(unittest.TestCase):
         """Test adding images then identifying - the core use case."""
         # Create a temporary database for this test
         with tempfile.TemporaryDirectory() as tmpdir:
-            from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
+            from sam3_pursuit.api.identifier import FursuitIdentifier
 
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
 
-            identifier = SAM3FursuitIdentifier(db_path=db_path, index_path=index_path)
+            identifier = FursuitIdentifier(db_path=db_path, index_path=index_path)
 
             # Add first two Blazi images
             added = identifier.add_images(
@@ -427,8 +427,8 @@ class TestBarqIngestion(unittest.TestCase):
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
 
-            from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
-            identifier = SAM3FursuitIdentifier(db_path=db_path, index_path=index_path)
+            from sam3_pursuit.api.identifier import FursuitIdentifier
+            identifier = FursuitIdentifier(db_path=db_path, index_path=index_path)
 
             # Run barq ingestion manually (simulating CLI)
             from pathlib import Path
@@ -491,11 +491,11 @@ class TestBarqIngestion(unittest.TestCase):
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
 
-            from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
+            from sam3_pursuit.api.identifier import FursuitIdentifier
             from sam3_pursuit.storage.database import SOURCE_BARQ, Database
             from pathlib import Path
 
-            identifier = SAM3FursuitIdentifier(db_path=db_path, index_path=index_path)
+            identifier = FursuitIdentifier(db_path=db_path, index_path=index_path)
             data_path = Path(data_dir)
 
             char_names = []
@@ -612,7 +612,7 @@ class TestMaskReuse(unittest.TestCase):
 
             # Load masks and reprocess
             loaded_masks = storage.load_masks_for_post("test", "test", "sam3", "fursuiter head")
-            reused_results = pipeline.process_with_masks(image, loaded_masks)
+            reused_results = pipeline.process(image, loaded_masks)
 
             # Compare results
             self.assertEqual(len(fresh_results), len(reused_results), "Should have same number of segments")

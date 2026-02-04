@@ -52,6 +52,7 @@ class Config:
     # Image processing
     PATCH_SIZE = 14
     TARGET_IMAGE_SIZE = 630
+    SAM3_IMAGE_SIZE = 644
 
     # Search
     DEFAULT_TOP_K = 5

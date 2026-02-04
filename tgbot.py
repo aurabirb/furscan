@@ -24,7 +24,7 @@ import webserver
 
 load_dotenv()
 
-from sam3_pursuit import SAM3FursuitIdentifier, Config
+from sam3_pursuit import FursuitIdentifier, Config
 from sam3_pursuit.api.annotator import annotate_image
 from sam3_pursuit.storage.database import SOURCE_TGBOT, get_git_version
 
@@ -35,11 +35,11 @@ CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
 _identifier = None
 
 
-def get_identifier() -> SAM3FursuitIdentifier:
+def get_identifier() -> FursuitIdentifier:
     """Get or create the identifier instance."""
     global _identifier
     if _identifier is None:
-        _identifier = SAM3FursuitIdentifier(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
+        _identifier = FursuitIdentifier(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
     return _identifier
 
 

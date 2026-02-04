@@ -74,11 +74,11 @@ class TestIngestTiming(unittest.TestCase):
 
     def test_ingest_with_masks_timing(self):
         """Time full ingestion pipeline with pre-computed masks."""
-        from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
+        from sam3_pursuit.api.identifier import FursuitIdentifier
 
         # --- Phase 1: Identifier initialization ---
         t0 = time.perf_counter()
-        identifier = SAM3FursuitIdentifier(
+        identifier = FursuitIdentifier(
             db_path=self.db_path,
             index_path=self.index_path,
             segmentor_model_name=Config.SAM3_MODEL,

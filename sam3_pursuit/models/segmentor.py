@@ -70,7 +70,7 @@ class FullImageSegmentor:
             segmentor=self.model_name,
         )]
 
-class FursuitSegmentor:
+class SAM3FursuitSegmentor:
 
     def __init__(
         self,
@@ -90,32 +90,28 @@ class FursuitSegmentor:
     @property
     def predictor(self):
         if self._predictor is None:
-            self._predictor = self._load_model()
+            from ultralytics.models.sam.predict import SAM3SemanticPredictor
+
+            overrides = dict(
+                conf=self.confidence_threshold,
+                task="segment",
+                mode="predict",
+                model=f"{self.model_name}.pt",
+                device=self.device,
+                imgsz=Config.SAM3_IMAGE_SIZE,
+                verbose=False,
+                save=False,
+            )
+            predictor = SAM3SemanticPredictor(overrides=overrides)
+            self._predictor = predictor
         return self._predictor
 
-    def _load_model(self, save=False):
-        from ultralytics.models.sam.predict import SAM3SemanticPredictor
-
-        overrides = dict(
-            conf=self.confidence_threshold,
-            task="segment",
-            mode="predict",
-            model=f"{self.model_name}.pt",
-            device=self.device,
-            imgsz=644,
-            verbose=False,
-            save=save,
-        )
-        return SAM3SemanticPredictor(overrides=overrides)
 
     def segment(self, image: Image.Image) -> list[SegmentationResult]:
         print(f"Segmenting image using {self.model_name} with concept '{self.concept}'")
         image_np = np.array(image.convert("RGB"))
         self.predictor.set_image(image_np)
         results = self.predictor(text=self.concept.split(","))
-        return self._process_results(image, results)
-
-    def _process_results(self, image: Image.Image, results) -> list[SegmentationResult]:
         segmentation_results = []
 
         for result in results:
@@ -126,8 +122,6 @@ class FursuitSegmentor:
             boxes = result.boxes
 
             for i, mask in enumerate(masks):
-                if i >= self.max_detections:
-                    break
 
                 confidence = 1.0
                 if boxes is not None and boxes.conf is not None and len(boxes.conf) > i:
@@ -151,10 +145,11 @@ class FursuitSegmentor:
                     segmentor=self.model_name,
                 ))
 
-        if not segmentation_results:
-            print(f"Warning: No segments found, using full image as fallback")
-            segmentor = FullImageSegmentor()
-            segmentation_results = segmentor.segment(image)
+        # Sort by confidence and limit to max_detections
+        segmentation_results.sort(key=lambda s: s.confidence, reverse=True)
+        if len(segmentation_results) > self.max_detections:
+            print(f"Limiting segments to top {self.max_detections} detections from {len(segmentation_results)} found.")
+            segmentation_results = segmentation_results[:self.max_detections]
 
         return segmentation_results
 

@@ -197,12 +197,12 @@ def _get_isolation_config(args):
 
 
 def _get_identifier(args):
-    from sam3_pursuit.api.identifier import SAM3FursuitIdentifier
+    from sam3_pursuit.api.identifier import FursuitIdentifier
     isolation_config = _get_isolation_config(args)
     segmentor_model_name = Config.SAM3_MODEL if getattr(args, "segment", True) else None
     segmentor_concept = args.concept if hasattr(args, "concept") and args.concept else Config.DEFAULT_CONCEPT
 
-    return SAM3FursuitIdentifier(
+    return FursuitIdentifier(
         db_path=args.db,
         index_path=args.index,
         isolation_config=isolation_config,
@@ -452,17 +452,12 @@ def ingest_from_directory(args):
             for img in images:
                 yield (character_name, img)
 
-    if args.regenerate_masks:
-        all_images = [str(img) for _, img in get_images()]
-        identifier.regenerate_masks(image_paths=all_images, source=source)
-        return
-
     for batch in batched(get_images(), batch_size):
         print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         names, images = zip(*batch)
         add_full_image = getattr(args, "add_full_image", True)
         added = identifier.add_images(
-            character_names=names,
+            character_names=list(names),
             image_paths=[str(p) for p in images],
             save_crops=args.save_crops,
             source=source,
@@ -590,23 +585,19 @@ def ingest_from_barq(args):
             for img in images:
                 yield (character_name, img)
 
-    if args.regenerate_masks:
-        all_images = [str(img) for _, img in get_images()]
-        identifier.regenerate_masks(image_paths=all_images, source=SOURCE_BARQ)
-        return
-
     for batch in batched(get_images(), batch_size):
         print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         names, images = zip(*batch)
         add_full_image = getattr(args, "add_full_image", True)
         added = identifier.add_images(
-            character_names=names,
+            character_names=list(names),
             image_paths=[str(p) for p in images],
             save_crops=args.save_crops,
             source=SOURCE_BARQ,
             add_full_image=add_full_image,
             skip_non_fursuit=args.skip_non_fursuit,
             classify_threshold=args.threshold,
+            force_regenerate_masks=args.regenerate_masks,
         )
         total_added += added
 
@@ -655,7 +646,7 @@ def stats_command(args):
 
 
 def segment_command(args):
-    from sam3_pursuit.models.segmentor import FursuitSegmentor
+    from sam3_pursuit.models.segmentor import SAM3FursuitSegmentor
 
     image_path = Path(args.image)
     if not image_path.exists():
@@ -663,7 +654,7 @@ def segment_command(args):
         sys.exit(1)
 
     concept = getattr(args, "concept", None) or Config.DEFAULT_CONCEPT
-    segmentor = FursuitSegmentor(concept=concept)
+    segmentor = SAM3FursuitSegmentor(concept=concept)
     results = segmentor.segment(Image.open(image_path))
 
     if args.output_dir:

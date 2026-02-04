@@ -10,10 +10,22 @@ from PIL import Image
 
 from sam3_pursuit.config import Config
 from sam3_pursuit.models.preprocessor import IsolationConfig
-from sam3_pursuit.pipeline.processor import ProcessingPipeline
+from sam3_pursuit.models.segmentor import SAM3FursuitSegmentor, FullImageSegmentor, SegmentationResult
+from sam3_pursuit.models.embedder import FursuitEmbedder
+from sam3_pursuit.models.preprocessor import BackgroundIsolator
 from sam3_pursuit.storage.database import Database, Detection
-from sam3_pursuit.storage.mask_storage import MaskStorage
 from sam3_pursuit.storage.vector_index import VectorIndex
+from sam3_pursuit.storage.mask_storage import MaskStorage
+
+
+@dataclass
+class ProcessingResult:
+    segmentation: SegmentationResult
+    embedding: np.ndarray
+    isolated_crop: Optional[Image.Image] = None
+    segmentor_model: str = "unknown"
+    segmentor_concept: Optional[str] = None
+    mask_reused: bool = False
 
 
 @dataclass
@@ -34,8 +46,7 @@ class SegmentResults:
     segment_confidence: float
     matches: list[IdentificationResult]
 
-
-class SAM3FursuitIdentifier:
+class FursuitIdentifier:
     def __init__(
         self,
         db_path: str = Config.DB_PATH,
@@ -46,16 +57,21 @@ class SAM3FursuitIdentifier:
         segmentor_concept: Optional[str] = "",
     ):
         self.device = device or Config.get_device()
+        self.segmentor_device = Config.get_segmentor_device()
+        if segmentor_model_name == Config.SAM3_MODEL:
+            self.segmentor = SAM3FursuitSegmentor(device=self.segmentor_device, concept=segmentor_concept)
+        else:
+            self.segmentor = FullImageSegmentor()
+        self.segmentor_model_name = self.segmentor.model_name
         self.db = Database(db_path)
         self.index = VectorIndex(index_path)
-        self.mask_storage = MaskStorage()
         self._sync_index_and_db()
-        self.pipeline = ProcessingPipeline(
-            device=self.device,
-            isolation_config=isolation_config,
-            segmentor_model_name=segmentor_model_name,
-            segmentor_concept=segmentor_concept
-        )
+        self.mask_storage = MaskStorage()
+        self.segmentor_concept = segmentor_concept
+        self.embedder_model_name = Config.DINOV2_MODEL
+        self.embedder = FursuitEmbedder(device=self.device, model_name=self.embedder_model_name)
+        self.isolator = BackgroundIsolator(isolation_config)
+
 
     def _sync_index_and_db(self):
         """Ensure FAISS index and database are in sync (crash recovery)."""
@@ -67,7 +83,7 @@ class SAM3FursuitIdentifier:
                 print(f"Sync: deleted {deleted} orphaned detections (embedding_id > {max_valid_id})")
 
     def _short_embedder_name(self) -> str:
-        emb = self.pipeline.embedder_model_name
+        emb = self.embedder_model_name
         if "dinov2-base" in emb:
             return "dv2b"
         elif "dinov2-large" in emb:
@@ -78,12 +94,12 @@ class SAM3FursuitIdentifier:
 
     def _build_preprocessing_info(self) -> str:
         """Build fingerprint for segmented crops."""
-        iso = self.pipeline.isolation_config
+        iso = self.isolator.config
         mode_map = {"solid": "s", "blur": "b", "none": "n"}
         parts = [
             "v2",
-            f"seg:{self.pipeline.segmentor_model_name}",
-            f"con:{(self.pipeline.segmentor_concept or '').replace('|', '.')}",
+            f"seg:{self.segmentor_model_name}",
+            f"con:{(self.segmentor_concept or '').replace('|', '.')}",
             f"bg:{mode_map.get(iso.mode, 'n')}",
         ]
         if iso.mode == "solid":
@@ -108,7 +124,7 @@ class SAM3FursuitIdentifier:
             print("Warning: Index is empty, no matches possible")
             return []
 
-        proc_results = self.pipeline.process(image)
+        proc_results = self.process(image)
         segment_results = []
         for i, proc_result in enumerate(proc_results):
             if save_crops and proc_result.isolated_crop:
@@ -121,7 +137,6 @@ class SAM3FursuitIdentifier:
                 matches=matches,
             ))
         return segment_results
-    
 
     def _save_debug_crop(
         self,
@@ -158,6 +173,53 @@ class SAM3FursuitIdentifier:
         results.sort(key=lambda x: x.confidence, reverse=True)
         return results[:top_k]
 
+    def _resize_to_patch_multiple(self, image: Image.Image, target_size: int = 630) -> Image.Image:
+        w, h = image.size
+        if w >= h:
+            new_w = target_size
+            new_h = int(h * target_size / w)
+        else:
+            new_h = target_size
+            new_w = int(w * target_size / h)
+        new_w = max(Config.PATCH_SIZE, (new_w // Config.PATCH_SIZE) * Config.PATCH_SIZE)
+        new_h = max(Config.PATCH_SIZE, (new_h // Config.PATCH_SIZE) * Config.PATCH_SIZE)
+        # print(f"Resizing image from ({w}, {h}) to ({new_w}, {new_h})")
+        return image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    def _load_segments_for_post(self, post_id: str, source: str, model: str, concept: str, image: Image.Image) -> list[SegmentationResult]:
+        if self.mask_storage.has_no_segments_marker(post_id, source, model, concept, image):
+            return FullImageSegmentor().segment(image)
+        masks = self.mask_storage.load_masks_for_post(post_id, source, model, concept)
+        segmentations = [
+            SegmentationResult.from_mask(image, mask, segmentor=self.segmentor_model_name) for mask in masks
+        ]
+        return segmentations
+
+    def _save_segments_for_post(self, post_id: str, source: str, model: str, concept: str, segmentations: list[SegmentationResult]) -> None:
+        masks = [seg.mask for seg in segmentations if seg.mask is not None]
+        if masks:
+            self.mask_storage.save_masks_for_post(post_id, source, self.segmentor_model_name, self.segmentor_concept, masks)
+        else:
+            self.mask_storage.save_no_segments_marker(post_id, source, self.segmentor_model_name, self.segmentor_concept)
+
+    def process(self, image: Image.Image) -> list[ProcessingResult]:
+        proc_results = []
+        segmentations = self.segmentor.segment(image)
+        for seg in segmentations:
+            isolated = self.isolator.isolate(seg.crop, seg.crop_mask)
+            isolated_crop = self._resize_to_patch_multiple(isolated)
+            embedding = self.embedder.embed(isolated_crop)
+            proc_results.append(ProcessingResult(
+                segmentation=seg,
+                embedding=embedding,
+                isolated_crop=isolated_crop,
+                segmentor_model=seg.segmentor,
+                segmentor_concept=self.segmentor_concept,
+                mask_reused=False,
+            ))
+        return proc_results
+
+
     def add_images(
         self,
         character_names: list[str],
@@ -171,20 +233,20 @@ class SAM3FursuitIdentifier:
         classify_threshold: float = Config.DEFAULT_CLASSIFY_THRESHOLD,
         post_ids: Optional[list[str]] = None,
     ) -> int:
+        
         assert len(character_names) == len(image_paths)
-
         character_names = [name.lower().replace(" ", "_") for name in character_names]
-
-        full_preproc = self._build_full_preprocessing_info() if add_full_image else None
-        seg_preproc = self._build_preprocessing_info()
 
         if post_ids is not None:
             assert len(post_ids) == len(image_paths)
         else:
             post_ids = [self._extract_post_id(p) for p in image_paths]
-        posts_need_full = self.db.get_posts_needing_update(post_ids, full_preproc, source) if add_full_image else set()
+
+        seg_preproc = self._build_preprocessing_info()
+        full_preproc = self._build_full_preprocessing_info()
+        posts_need_full = self.db.get_posts_needing_update(post_ids, full_preproc, source)
         posts_need_seg = self.db.get_posts_needing_update(post_ids, seg_preproc, source)
-        posts_to_process = posts_need_full | posts_need_seg
+        posts_to_process = posts_need_seg if not add_full_image else posts_need_full | posts_need_seg
 
         print(f"Processing {len(posts_to_process)} posts ({len(posts_need_full)} need full, {len(posts_need_seg)} need seg)")
         filtered_indices = [i for i, pid in enumerate(post_ids) if pid in posts_to_process]
@@ -195,6 +257,7 @@ class SAM3FursuitIdentifier:
         if skip_non_fursuit:
             from sam3_pursuit.models.classifier import ImageClassifier
             classifier = ImageClassifier(device=self.device)
+            print(f"Using classifier to skip non-fursuit images (threshold: {classify_threshold})")
 
         total = len(filtered_indices)
         added_count = 0
@@ -204,7 +267,7 @@ class SAM3FursuitIdentifier:
         pending_embeddings: list[np.ndarray] = []
         pending_detections: list[Detection] = []
 
-        def make_detection(post_id, character_name, bbox, confidence, segmentor_model, filename, preproc_info):
+        def new_detection(post_id, character_name, bbox, confidence, segmentor_model, filename, preproc_info):
             return Detection(
                 id=None, post_id=post_id, character_name=character_name, embedding_id=-1,
                 bbox_x=bbox[0], bbox_y=bbox[1], bbox_width=bbox[2], bbox_height=bbox[3],
@@ -218,6 +281,7 @@ class SAM3FursuitIdentifier:
             nonlocal added_count
             if not pending_embeddings:
                 return
+            print(f"  Saving batch of {len(pending_detections)} embeddings to database and index...")
             start_id = self.index.add(np.vstack(pending_embeddings).astype(np.float32))
             for i, detection in enumerate(pending_detections):
                 detection.embedding_id = start_id + i
@@ -245,37 +309,54 @@ class SAM3FursuitIdentifier:
                 print(f"[{i+1}/{total}] Skipped {filename} (not fursuit)")
                 continue
 
-            w, h = image.size
+            try:
+                segmentations = self._load_segments_for_post(post_id, source, self.segmentor_model_name, self.segmentor_concept, image)
+            except Exception as e:
+                print(f"[{i + 1}/{total}] Failed to load segments for {filename}: {e}")
+                segmentations = []
 
-            if add_full_image and post_id in posts_need_full:
-                resized_full = self.pipeline._resize_to_patch_multiple(image)
-                pending_embeddings.append(self.pipeline.embed_only(resized_full).reshape(1, -1))
-                pending_detections.append(make_detection(
-                    post_id, character_name, (0, 0, w, h), 1.0, "full", filename, full_preproc))
-
-            if post_id in posts_need_seg:
-                mask_reused, masks = self._ensure_masks(image, post_id, source)
-                if mask_reused:
-                    masks_reused_count += 1
-                else:
-                    masks_generated_count += 1
-
-                proc_results = self.pipeline.process_with_masks(image, masks)
-                for j, proc_result in enumerate(proc_results):
-                    if save_crops and proc_result.isolated_crop:
-                        seg_name = f"{post_id}_seg_{j}"
-                        self._save_debug_crop(proc_result.isolated_crop, seg_name, source=source)
-                    pending_embeddings.append(proc_result.embedding.reshape(1, -1))
-                    pending_detections.append(make_detection(
-                        post_id, character_name, proc_result.segmentation.bbox,
-                        proc_result.segmentation.confidence, proc_result.segmentor_model,
-                        filename, seg_preproc))
-
-                full_msg = "+full" if (add_full_image and post_id in posts_need_full) else ""
-                mask_msg = " (masks reused)" if mask_reused else ""
-                print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments{full_msg}{mask_msg}")
+            if segmentations:
+                mask_reused = True
+                masks_reused_count += len(segmentations)
             else:
-                print(f"[{i+1}/{total}] {character_name}: full only")
+                mask_reused = False
+                segmentations = self.segmentor.segment(image) # Long operation
+                masks_generated_count += len(segmentations)
+                try:
+                    self._save_segments_for_post(post_id, source, self.segmentor_model_name, self.segmentor_concept, segmentations)
+                except Exception as e:
+                    print(f"[{i+1}/{total}] Failed to save segments for {filename}: {e}")
+
+            if not segmentations:
+                print(f"[{i+1}/{total}] No segments found for {filename}, adding full image as fallback")
+                segmentations = FullImageSegmentor().segment(image)
+
+            proc_results = []
+            for seg in segmentations:
+                isolated = self.isolator.isolate(seg.crop, seg.crop_mask)
+                isolated_crop = self._resize_to_patch_multiple(isolated)
+                embedding = self.embedder.embed(isolated_crop)
+                proc_results.append(ProcessingResult(
+                    segmentation=seg,
+                    embedding=embedding,
+                    isolated_crop=isolated_crop,
+                    segmentor_model=seg.segmentor,
+                    segmentor_concept=self.segmentor_concept,
+                    mask_reused=mask_reused,
+                )) # TODO: can share processing result over network for distributed ingestion
+
+            for j, proc_result in enumerate(proc_results):
+                if save_crops and proc_result.isolated_crop:
+                    seg_name = f"{post_id}_seg_{j}"
+                    self._save_debug_crop(proc_result.isolated_crop, seg_name, source=source)
+                pending_embeddings.append(proc_result.embedding.reshape(1, -1))
+                pending_detections.append(new_detection(
+                    post_id, character_name, proc_result.segmentation.bbox,
+                    proc_result.segmentation.confidence, proc_result.segmentor_model,
+                    filename, seg_preproc))
+
+            mask_msg = " (masks reused)" if mask_reused else ""
+            print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments{mask_msg}")
 
             if len(pending_embeddings) >= batch_size:
                 flush_batch()
@@ -287,76 +368,8 @@ class SAM3FursuitIdentifier:
         print(f"Ingestion complete: {added_count} embeddings added{skip_msg}{mask_msg} (index: {self.index.size})")
         return added_count
 
-    def regenerate_masks(
-        self,
-        image_paths: list[str],
-        source: str,
-    ) -> dict:
-        """Check masks for all images and regenerate missing/corrupt ones.
-
-        Bypasses the DB — only looks at mask storage and runs segmentation as needed.
-        """
-        total = len(image_paths)
-        ok = 0
-        regenerated = 0
-        failed = 0
-
-        for i, img_path in enumerate(image_paths):
-            post_id = self._extract_post_id(img_path)
-            filename = os.path.basename(img_path)
-            try:
-                image = self._load_image(img_path)
-                reused, masks = self._ensure_masks(image, post_id, source)
-                if reused:
-                    ok += 1
-                else:
-                    regenerated += 1
-                    print(f"[{i+1}/{total}] {filename}: generated {len(masks)} mask(s)")
-            except Exception as e:
-                failed += 1
-                print(f"[{i+1}/{total}] {filename}: FAILED ({e})")
-
-        print(f"\nMask check: {ok} ok, {regenerated} regenerated, {failed} failed (total: {total})")
-        return {"ok": ok, "regenerated": regenerated, "failed": failed, "total": total}
-
-    def _ensure_masks(self, image: Image.Image, post_id: str, source: str) -> tuple[bool, list[tuple[int, np.ndarray]]]:
-        """Check if masks exist and can be loaded; generate and save if missing.
-
-        Returns (reused, masks) where masks is list of (segment_index, mask_array).
-        """
-        from sam3_pursuit.models.segmentor import FullImageSegmentor
-
-        model = self.pipeline.segmentor_model_name
-        concept = self.pipeline.segmentor_concept or ""
-        src = source or "unknown"
-
-        try:
-            existing = self.mask_storage.load_masks_for_post(post_id, src, model, concept)
-            if existing:
-                return True, existing
-        except Exception:
-            pass
-
-        if self.mask_storage.has_no_segments_marker(post_id, src, model, concept):
-            results = FullImageSegmentor().segment(image)
-            return True, [(0, results[0].mask)]
-
-        results = self.pipeline.segmentor.segment(image)
-
-        is_fallback = len(results) > 0 and results[0].segmentor == "full"
-        if is_fallback:
-            self.mask_storage.save_no_segments_marker(post_id, src, model, concept)
-            return False, [(0, results[0].mask)]
-
-        masks = []
-        for j, seg in enumerate(results):
-            seg_name = f"{post_id}_seg_{j}"
-            if seg.mask is not None:
-                self.mask_storage.save_mask(
-                    seg.mask, seg_name, source=src,
-                    model=model, concept=concept)
-                masks.append((j, seg.mask))
-        return False, masks
+        # print(f"\nMask check: {ok} ok, {regenerated} regenerated, {failed} failed (total: {total})")
+        # return {"ok": ok, "regenerated": regenerated, "failed": failed, "total": total}
 
     def _load_image(self, img_path: str) -> Image.Image:
         img_path = str(img_path)
