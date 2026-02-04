@@ -324,6 +324,8 @@ class SAM3FursuitIdentifier:
 
         Returns (reused, masks) where masks is list of (segment_index, mask_array).
         """
+        from sam3_pursuit.models.segmentor import FullImageSegmentor
+
         model = self.pipeline.segmentor_model_name
         concept = self.pipeline.segmentor_concept or ""
         src = source or "unknown"
@@ -335,14 +337,24 @@ class SAM3FursuitIdentifier:
         except Exception:
             pass
 
+        if self.mask_storage.has_no_segments_marker(post_id, src, model, concept):
+            results = FullImageSegmentor().segment(image)
+            return True, [(0, results[0].mask)]
+
         results = self.pipeline.segmentor.segment(image)
+
+        is_fallback = len(results) > 0 and results[0].segmentor == "full"
+        if is_fallback:
+            self.mask_storage.save_no_segments_marker(post_id, src, model, concept)
+            return False, [(0, results[0].mask)]
+
         masks = []
         for j, seg in enumerate(results):
             seg_name = f"{post_id}_seg_{j}"
             if seg.mask is not None:
                 self.mask_storage.save_mask(
                     seg.mask, seg_name, source=src,
-                    model=seg.segmentor, concept=concept)
+                    model=model, concept=concept)
                 masks.append((j, seg.mask))
         return False, masks
 

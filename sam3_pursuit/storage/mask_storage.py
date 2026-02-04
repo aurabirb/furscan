@@ -80,6 +80,18 @@ class MaskStorage:
             results.append((seg_idx, np.array(Image.open(path).convert("L"))))
         return results
 
+    def save_no_segments_marker(self, post_id: str, source: str, model: str, concept: str) -> str:
+        """Save a marker indicating the segmentor found no segments for this post."""
+        target_dir = self._get_mask_dir(source, model, concept)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path = target_dir / f"{post_id}.noseg"
+        path.touch()
+        return str(path)
+
+    def has_no_segments_marker(self, post_id: str, source: str, model: str, concept: str) -> bool:
+        """Check if a no-segments marker exists for this post."""
+        return (self._get_mask_dir(source, model, concept) / f"{post_id}.noseg").exists()
+
     def load_mask(self, name: str, source: str, model: str, concept: str) -> Optional[np.ndarray]:
         path = self._get_mask_dir(source, model, concept) / f"{name}.png"
         if not path.exists():
