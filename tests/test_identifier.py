@@ -286,8 +286,8 @@ class TestIdentification(unittest.TestCase):
         cls.skip_reason = None
 
         # Load identifier once for all tests
-        from sam3_pursuit.api.identifier import FursuitIdentifier
-        cls.identifier = FursuitIdentifier(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
+        from sam3_pursuit.api.identifier import FursuitIngestor
+        cls.identifier = FursuitIngestor(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
 
     def setUp(self):
         """Skip test if database not available."""
@@ -358,12 +358,12 @@ class TestIdentification(unittest.TestCase):
         """Test adding images then identifying - the core use case."""
         # Create a temporary database for this test
         with tempfile.TemporaryDirectory() as tmpdir:
-            from sam3_pursuit.api.identifier import FursuitIdentifier
+            from sam3_pursuit.api.identifier import FursuitIngestor
 
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
 
-            identifier = FursuitIdentifier(db_path=db_path, index_path=index_path)
+            identifier = FursuitIngestor(db_path=db_path, index_path=index_path)
 
             # Add first two Blazi images
             added = identifier.add_images(
@@ -427,8 +427,8 @@ class TestBarqIngestion(unittest.TestCase):
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
 
-            from sam3_pursuit.api.identifier import FursuitIdentifier
-            identifier = FursuitIdentifier(db_path=db_path, index_path=index_path)
+            from sam3_pursuit.api.identifier import FursuitIngestor
+            identifier = FursuitIngestor(db_path=db_path, index_path=index_path)
 
             # Run barq ingestion manually (simulating CLI)
             from pathlib import Path
@@ -491,11 +491,11 @@ class TestBarqIngestion(unittest.TestCase):
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
 
-            from sam3_pursuit.api.identifier import FursuitIdentifier
+            from sam3_pursuit.api.identifier import FursuitIngestor
             from sam3_pursuit.storage.database import SOURCE_BARQ, Database
             from pathlib import Path
 
-            identifier = FursuitIdentifier(db_path=db_path, index_path=index_path)
+            identifier = FursuitIngestor(db_path=db_path, index_path=index_path)
             data_path = Path(data_dir)
 
             char_names = []
@@ -590,29 +590,28 @@ class TestMaskReuse(unittest.TestCase):
     @unittest.skipIf(not os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "blazi_wolf.1.jpg")), "Test image not found")
     def test_process_with_masks_matches_fresh_processing(self):
         """Test that processing with saved masks produces identical embeddings to fresh SAM3."""
-        from sam3_pursuit.api.identifier import FursuitIdentifier
-        from sam3_pursuit.models.segmentor import SegmentationResult
+        from sam3_pursuit.api.identifier import FursuitIngestor
+        from sam3_pursuit.pipeline.processor import CacheKey
         from sam3_pursuit.storage.mask_storage import MaskStorage
-        from sam3_pursuit.models.preprocessor import BackgroundIsolator
-        from sam3_pursuit.models.embedder import FursuitEmbedder
 
         image = Image.open(self.TEST_IMAGE)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
-            identifier = FursuitIdentifier(
+            ingestor = FursuitIngestor(
                 db_path=db_path, index_path=index_path,
                 segmentor_model_name=Config.SAM3_MODEL,
                 segmentor_concept="fursuiter head",
             )
             storage = MaskStorage(base_dir=tmpdir)
+            ingestor.pipeline.mask_storage = storage
 
-            # Run fresh processing with SAM3
-            fresh_results = identifier.process(image)
+            # Run fresh processing (no cache_key → no caching)
+            fresh_results = ingestor.pipeline.process(image)
             self.assertGreater(len(fresh_results), 0, "Should detect at least one segment")
 
-            # Save full masks (not crop_mask) for bbox computation
+            # Save full masks for bbox computation
             for i, result in enumerate(fresh_results):
                 storage.save_mask(
                     result.segmentation.mask,
@@ -620,29 +619,23 @@ class TestMaskReuse(unittest.TestCase):
                     "test", Config.SAM3_MODEL, "fursuiter head"
                 )
 
-            # Load masks and reprocess using SegmentationResult.from_mask
-            loaded_masks = storage.load_masks_for_post("test", "test", Config.SAM3_MODEL, "fursuiter head")
-            reused_results = []
-            for mask in loaded_masks:
-                seg = SegmentationResult.from_mask(image, mask, segmentor=identifier.segmentor_model_name)
-                if seg is None:
-                    continue
-                isolated = identifier.isolator.isolate(seg.crop, seg.crop_mask)
-                resized = identifier._resize_to_patch_multiple(isolated)
-                embedding = identifier.embedder.embed(resized)
-                reused_results.append((seg, embedding))
+            # Reprocess using CacheKey (triggers mask cache load)
+            cache_key = CacheKey(post_id="test", source="test")
+            reused_results = ingestor.pipeline.process(image, cache_key=cache_key)
 
             # Compare results
             self.assertEqual(len(fresh_results), len(reused_results), "Should have same number of segments")
 
-            for i, (fresh, (reused_seg, reused_emb)) in enumerate(zip(fresh_results, reused_results)):
+            for i, (fresh, reused) in enumerate(zip(fresh_results, reused_results)):
                 # Embeddings should be identical
                 np.testing.assert_array_almost_equal(
-                    fresh.embedding, reused_emb, decimal=5,
+                    fresh.embedding, reused.embedding, decimal=5,
                     err_msg=f"Segment {i} embeddings don't match"
                 )
                 # Bboxes should match
-                self.assertEqual(fresh.segmentation.bbox, reused_seg.bbox, f"Segment {i} bboxes don't match")
+                self.assertEqual(fresh.segmentation.bbox, reused.segmentation.bbox, f"Segment {i} bboxes don't match")
+                # Reused result should have mask_reused=True
+                self.assertTrue(reused.mask_reused, f"Segment {i} should have mask_reused=True")
 
 
 if __name__ == "__main__":

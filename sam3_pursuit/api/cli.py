@@ -194,13 +194,13 @@ def _get_isolation_config(args):
     )
 
 
-def _get_identifier(args):
-    from sam3_pursuit.api.identifier import FursuitIdentifier
+def _get_ingestor(args):
+    from sam3_pursuit.api.identifier import FursuitIngestor
     isolation_config = _get_isolation_config(args)
     segmentor_model_name = Config.SAM3_MODEL if getattr(args, "segment", True) else None
     segmentor_concept = args.concept if hasattr(args, "concept") and args.concept else Config.DEFAULT_CONCEPT
 
-    return FursuitIdentifier(
+    return FursuitIngestor(
         db_path=args.db,
         index_path=args.index,
         isolation_config=isolation_config,
@@ -244,11 +244,11 @@ def identify_command(args):
         print(f"Error: Image not found: {image_path}")
         sys.exit(1)
 
-    identifier = _get_identifier(args)
+    ingestor = _get_ingestor(args)
     image = Image.open(image_path)
     save_crops = getattr(args, "save_crops", False)
     crop_prefix = image_path.stem
-    results = identifier.identify(
+    results = ingestor.identify(
         image,
         top_k=args.top_k,
         save_crops=save_crops,
@@ -307,12 +307,12 @@ def add_command(args):
         print("Error: Character name is required.")
         sys.exit(1)
 
-    identifier = _get_identifier(args)
+    ingestor = _get_ingestor(args)
     add_full_image = getattr(args, "add_full_image", True)
     if args.source not in SOURCES_AVAILABLE:
         print(f"Error: Invalid source '{args.source}'. Must be one of: {', '.join(SOURCES_AVAILABLE)}")
         sys.exit(1)
-    added = identifier.add_images(
+    added = ingestor.add_images(
         character_names=[args.character] * len(valid_paths),
         image_paths=valid_paths,
         save_crops=args.save_crops,
@@ -421,7 +421,7 @@ def ingest_from_directory(args):
     from itertools import batched
     batch_size = 100
 
-    identifier = _get_identifier(args)
+    ingestor = _get_ingestor(args)
     data_dir = Path(args.data_dir)
 
     if not data_dir.exists():
@@ -454,7 +454,7 @@ def ingest_from_directory(args):
         print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         names, images = zip(*batch)
         add_full_image = getattr(args, "add_full_image", True)
-        added = identifier.add_images(
+        added = ingestor.add_images(
             character_names=list(names),
             image_paths=[str(p) for p in images],
             save_crops=args.save_crops,
@@ -470,7 +470,7 @@ def ingest_from_directory(args):
 
 def ingest_from_nfc25(args):
     """Ingest images from NFC25 dataset."""
-    identifier = _get_identifier(args)
+    ingestor = _get_ingestor(args)
 
     data_dir = Path(args.data_dir)
     json_path = data_dir / "nfc25-fursuit-list.json"
@@ -501,7 +501,7 @@ def ingest_from_nfc25(args):
             break
 
     add_full_image = getattr(args, "add_full_image", True)
-    added = identifier.add_images(
+    added = ingestor.add_images(
         character_names=char_names,
         image_paths=img_paths,
         save_crops=args.save_crops,
@@ -526,7 +526,7 @@ def ingest_from_barq(args):
     from sam3_pursuit.storage.database import SOURCE_BARQ
 
     batch_size = 100
-    identifier = _get_identifier(args)
+    ingestor = _get_ingestor(args)
     data_dir = Path(args.data_dir)
 
     if not data_dir.exists():
@@ -587,7 +587,7 @@ def ingest_from_barq(args):
         print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         names, images = zip(*batch)
         add_full_image = getattr(args, "add_full_image", True)
-        added = identifier.add_images(
+        added = ingestor.add_images(
             character_names=list(names),
             image_paths=[str(p) for p in images],
             save_crops=args.save_crops,
@@ -603,8 +603,8 @@ def ingest_from_barq(args):
 
 def stats_command(args):
     """Handle stats command."""
-    identifier = _get_identifier(args)
-    stats = identifier.get_stats()
+    ingestor = _get_ingestor(args)
+    stats = ingestor.get_stats()
 
     if hasattr(args, "json") and args.json:
         print(json.dumps(stats, indent=2, default=str))

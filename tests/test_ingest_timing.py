@@ -74,18 +74,18 @@ class TestIngestTiming(unittest.TestCase):
 
     def test_ingest_with_masks_timing(self):
         """Time full ingestion pipeline with pre-computed masks."""
-        from sam3_pursuit.api.identifier import FursuitIdentifier
+        from sam3_pursuit.api.identifier import FursuitIngestor
 
         # --- Phase 1: Identifier initialization ---
         t0 = time.perf_counter()
-        identifier = FursuitIdentifier(
+        identifier = FursuitIngestor(
             db_path=self.db_path,
             index_path=self.index_path,
             segmentor_model_name=Config.SAM3_MODEL,
             segmentor_concept=Config.DEFAULT_CONCEPT,
         )
         # Point mask storage at our pre-computed masks
-        identifier.mask_storage = MaskStorage(base_dir=self.mask_dir)
+        identifier.pipeline.mask_storage = MaskStorage(base_dir=self.mask_dir)
         t_init = time.perf_counter() - t0
 
         # --- Phase 2: Ingestion ---
@@ -118,7 +118,7 @@ class TestIngestTiming(unittest.TestCase):
 
     def test_per_step_breakdown(self):
         """Time individual steps: mask load, isolation, embedding, db."""
-        from sam3_pursuit.api.identifier import FursuitIdentifier
+        from sam3_pursuit.api.identifier import FursuitIngestor
         from sam3_pursuit.models.segmentor import SegmentationResult
 
         mask_storage = MaskStorage(base_dir=self.mask_dir)
@@ -126,7 +126,7 @@ class TestIngestTiming(unittest.TestCase):
 
         # Init identifier (loads DINOv2, defers SAM3)
         t0 = time.perf_counter()
-        identifier = FursuitIdentifier(
+        identifier = FursuitIngestor(
             db_path=os.path.join(self.tmpdir, "breakdown.db"),
             index_path=os.path.join(self.tmpdir, "breakdown.index"),
             segmentor_model_name=Config.SAM3_MODEL,
@@ -155,15 +155,15 @@ class TestIngestTiming(unittest.TestCase):
                 t_from_mask += time.perf_counter() - t
 
                 t = time.perf_counter()
-                isolated = identifier.isolator.isolate(seg.crop, seg.crop_mask)
+                isolated = identifier.pipeline.isolator.isolate(seg.crop, seg.crop_mask)
                 t_isolate += time.perf_counter() - t
 
                 t = time.perf_counter()
-                resized = identifier._resize_to_patch_multiple(isolated)
+                resized = identifier.pipeline._resize_to_patch_multiple(isolated)
                 t_resize += time.perf_counter() - t
 
                 t = time.perf_counter()
-                embedding = identifier.embedder.embed(resized)
+                embedding = identifier.pipeline.embedder.embed(resized)
                 t_embed += time.perf_counter() - t
 
         print(f"\n{'=' * 60}")

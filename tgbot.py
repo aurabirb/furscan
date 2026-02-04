@@ -24,23 +24,23 @@ import webserver
 
 load_dotenv()
 
-from sam3_pursuit import FursuitIdentifier, Config
+from sam3_pursuit import FursuitIngestor, Config
 from sam3_pursuit.api.annotator import annotate_image
 from sam3_pursuit.storage.database import SOURCE_TGBOT, get_git_version
 
 # Pattern to match "character:Name" in caption
 CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
 
-# Global identifier instance (lazy loaded)
-_identifier = None
+# Global ingestor instance (lazy loaded)
+_ingestor = None
 
 
-def get_identifier() -> FursuitIdentifier:
-    """Get or create the identifier instance."""
-    global _identifier
-    if _identifier is None:
-        _identifier = FursuitIdentifier(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
-    return _identifier
+def get_ingestor() -> FursuitIngestor:
+    """Get or create the ingestor instance."""
+    global _ingestor
+    if _ingestor is None:
+        _ingestor = FursuitIngestor(segmentor_model_name=Config.SAM3_MODEL, segmentor_concept=Config.DEFAULT_CONCEPT)
+    return _ingestor
 
 
 async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -98,7 +98,7 @@ async def add_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, characte
         # Rename temp file to use post_id so identifier extracts it correctly
         post_id_path = temp_path.parent / f"{post_id}.jpg"
         temp_path.rename(post_id_path)
-        identifier = get_identifier()
+        identifier = get_ingestor()
         added = identifier.add_images(
             character_names=[character_name],
             image_paths=[str(post_id_path)],
@@ -135,7 +135,7 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
     new_file = await photo_attachment[-1].get_file()
     temp_path = await download_tg_file(new_file)
     image = Image.open(temp_path)
-    results = get_identifier().identify(image, top_k=5)
+    results = get_ingestor().identify(image, top_k=5)
 
     reply_kwargs = {"chat_id": chat_id}
     if reply_to_message_id:
@@ -258,7 +258,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command."""
     try:
-        identifier = get_identifier()
+        identifier = get_ingestor()
         stats = identifier.get_stats()
         import yaml
         msg = yaml.safe_dump(stats)
