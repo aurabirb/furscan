@@ -187,7 +187,7 @@ class FursuitIdentifier:
         return image.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
     def _load_segments_for_post(self, post_id: str, source: str, model: str, concept: str, image: Image.Image) -> list[SegmentationResult]:
-        if self.mask_storage.has_no_segments_marker(post_id, source, model, concept, image):
+        if self.mask_storage.has_no_segments_marker(post_id, source, model, concept):
             return FullImageSegmentor().segment(image)
         masks = self.mask_storage.load_masks_for_post(post_id, source, model, concept)
         segmentations = [

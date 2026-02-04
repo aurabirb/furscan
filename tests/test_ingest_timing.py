@@ -118,21 +118,21 @@ class TestIngestTiming(unittest.TestCase):
 
     def test_per_step_breakdown(self):
         """Time individual steps: mask load, isolation, embedding, db."""
-        from sam3_pursuit.models.embedder import FursuitEmbedder
-        from sam3_pursuit.models.preprocessor import BackgroundIsolator, IsolationConfig
+        from sam3_pursuit.api.identifier import FursuitIdentifier
         from sam3_pursuit.models.segmentor import SegmentationResult
-        from sam3_pursuit.pipeline.processor import ProcessingPipeline
 
         mask_storage = MaskStorage(base_dir=self.mask_dir)
         image = Image.open(TEST_IMAGE)
 
-        # Init models once
+        # Init identifier (loads DINOv2, defers SAM3)
         t0 = time.perf_counter()
-        pipeline = ProcessingPipeline(
+        identifier = FursuitIdentifier(
+            db_path=os.path.join(self.tmpdir, "breakdown.db"),
+            index_path=os.path.join(self.tmpdir, "breakdown.index"),
             segmentor_model_name=Config.SAM3_MODEL,
             segmentor_concept=Config.DEFAULT_CONCEPT,
         )
-        t_pipeline_init = time.perf_counter() - t0
+        t_init = time.perf_counter() - t0
 
         # Benchmark individual steps
         t_load_mask = 0
@@ -149,27 +149,27 @@ class TestIngestTiming(unittest.TestCase):
             masks = mask_storage.load_masks_for_post(post_id, "barq", Config.SAM3_MODEL, Config.DEFAULT_CONCEPT)
             t_load_mask += time.perf_counter() - t
 
-            for seg_idx, mask in masks:
+            for mask in masks:
                 t = time.perf_counter()
                 seg = SegmentationResult.from_mask(image, mask, segmentor=Config.SAM3_MODEL)
                 t_from_mask += time.perf_counter() - t
 
                 t = time.perf_counter()
-                isolated = pipeline.isolator.isolate(seg.crop, seg.crop_mask)
+                isolated = identifier.isolator.isolate(seg.crop, seg.crop_mask)
                 t_isolate += time.perf_counter() - t
 
                 t = time.perf_counter()
-                resized = pipeline._resize_to_patch_multiple(isolated)
+                resized = identifier._resize_to_patch_multiple(isolated)
                 t_resize += time.perf_counter() - t
 
                 t = time.perf_counter()
-                embedding = pipeline.embedder.embed(resized)
+                embedding = identifier.embedder.embed(resized)
                 t_embed += time.perf_counter() - t
 
         print(f"\n{'=' * 60}")
         print(f"PER-STEP BREAKDOWN ({n} images, 1 mask each)")
         print(f"{'=' * 60}")
-        print(f"  Pipeline init:       {t_pipeline_init:.3f}s  (DINOv2 only, SAM3 deferred)")
+        print(f"  Identifier init:     {t_init:.3f}s  (DINOv2 only, SAM3 deferred)")
         print(f"  Mask load:           {t_load_mask:.3f}s  ({t_load_mask / n * 1000:.1f}ms/img)")
         print(f"  Crop from mask:      {t_from_mask:.3f}s  ({t_from_mask / n * 1000:.1f}ms/img)")
         print(f"  Background isolate:  {t_isolate:.3f}s  ({t_isolate / n * 1000:.1f}ms/img)")

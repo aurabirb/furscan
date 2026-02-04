@@ -88,8 +88,6 @@ Examples:
     ingest_parser.add_argument("--save-crops", action="store_true", help="Save crop images")
     ingest_parser.add_argument("--no-full", dest="add_full_image", action="store_false",
                                help="Don't add full image embedding (only segments)")
-    ingest_parser.add_argument("--regenerate-masks", action="store_true",
-                               help="Only check/regenerate missing masks (skip embedding and DB)")
     _add_classify_args(ingest_parser)
 
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
@@ -597,7 +595,6 @@ def ingest_from_barq(args):
             add_full_image=add_full_image,
             skip_non_fursuit=args.skip_non_fursuit,
             classify_threshold=args.threshold,
-            force_regenerate_masks=args.regenerate_masks,
         )
         total_added += added
 

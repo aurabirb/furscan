@@ -583,23 +583,33 @@ class TestMaskReuse(unittest.TestCase):
 
             loaded = storage.load_masks_for_post("post456", "barq", "sam3", "fursuiter head")
             self.assertEqual(len(loaded), 2)
-            self.assertEqual(loaded[0][0], 0)  # segment index
-            self.assertEqual(loaded[1][0], 1)
+            # Masks are returned as np.ndarray in segment order
+            self.assertIsInstance(loaded[0], np.ndarray)
+            self.assertIsInstance(loaded[1], np.ndarray)
 
     @unittest.skipIf(not os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "blazi_wolf.1.jpg")), "Test image not found")
     def test_process_with_masks_matches_fresh_processing(self):
         """Test that processing with saved masks produces identical embeddings to fresh SAM3."""
-        from sam3_pursuit.pipeline.processor import ProcessingPipeline
+        from sam3_pursuit.api.identifier import FursuitIdentifier
+        from sam3_pursuit.models.segmentor import SegmentationResult
         from sam3_pursuit.storage.mask_storage import MaskStorage
+        from sam3_pursuit.models.preprocessor import BackgroundIsolator
+        from sam3_pursuit.models.embedder import FursuitEmbedder
 
         image = Image.open(self.TEST_IMAGE)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            pipeline = ProcessingPipeline(segmentor_model_name="sam3", segmentor_concept="fursuiter head")
+            db_path = os.path.join(tmpdir, "test.db")
+            index_path = os.path.join(tmpdir, "test.index")
+            identifier = FursuitIdentifier(
+                db_path=db_path, index_path=index_path,
+                segmentor_model_name=Config.SAM3_MODEL,
+                segmentor_concept="fursuiter head",
+            )
             storage = MaskStorage(base_dir=tmpdir)
 
             # Run fresh processing with SAM3
-            fresh_results = pipeline.process(image)
+            fresh_results = identifier.process(image)
             self.assertGreater(len(fresh_results), 0, "Should detect at least one segment")
 
             # Save full masks (not crop_mask) for bbox computation
@@ -607,24 +617,32 @@ class TestMaskReuse(unittest.TestCase):
                 storage.save_mask(
                     result.segmentation.mask,
                     f"test_seg_{i}",
-                    "test", "sam3", "fursuiter head"
+                    "test", Config.SAM3_MODEL, "fursuiter head"
                 )
 
-            # Load masks and reprocess
-            loaded_masks = storage.load_masks_for_post("test", "test", "sam3", "fursuiter head")
-            reused_results = pipeline.process(image, loaded_masks)
+            # Load masks and reprocess using SegmentationResult.from_mask
+            loaded_masks = storage.load_masks_for_post("test", "test", Config.SAM3_MODEL, "fursuiter head")
+            reused_results = []
+            for mask in loaded_masks:
+                seg = SegmentationResult.from_mask(image, mask, segmentor=identifier.segmentor_model_name)
+                if seg is None:
+                    continue
+                isolated = identifier.isolator.isolate(seg.crop, seg.crop_mask)
+                resized = identifier._resize_to_patch_multiple(isolated)
+                embedding = identifier.embedder.embed(resized)
+                reused_results.append((seg, embedding))
 
             # Compare results
             self.assertEqual(len(fresh_results), len(reused_results), "Should have same number of segments")
 
-            for i, (fresh, reused) in enumerate(zip(fresh_results, reused_results)):
+            for i, (fresh, (reused_seg, reused_emb)) in enumerate(zip(fresh_results, reused_results)):
                 # Embeddings should be identical
                 np.testing.assert_array_almost_equal(
-                    fresh.embedding, reused.embedding, decimal=5,
+                    fresh.embedding, reused_emb, decimal=5,
                     err_msg=f"Segment {i} embeddings don't match"
                 )
                 # Bboxes should match
-                self.assertEqual(fresh.segmentation.bbox, reused.segmentation.bbox, f"Segment {i} bboxes don't match")
+                self.assertEqual(fresh.segmentation.bbox, reused_seg.bbox, f"Segment {i} bboxes don't match")
 
 
 if __name__ == "__main__":
