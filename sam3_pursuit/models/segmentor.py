@@ -80,7 +80,7 @@ class FursuitSegmentor:
         max_detections: int = Config.MAX_DETECTIONS,
         concept: Optional[str] = Config.DEFAULT_CONCEPT,
     ):
-        self.device = device or Config.get_device()
+        self.device = device or Config.get_segmentor_device()
         self.confidence_threshold = confidence_threshold
         self.max_detections = max_detections
         self.model_name = model_name or Config.SAM3_MODEL

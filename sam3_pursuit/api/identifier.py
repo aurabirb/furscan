@@ -254,34 +254,16 @@ class SAM3FursuitIdentifier:
                     post_id, character_name, (0, 0, w, h), 1.0, "full", filename, full_preproc))
 
             if post_id in posts_need_seg:
-                # Check for existing masks
-                try:
-                    existing_masks = self.mask_storage.load_masks_for_post(
-                        post_id, source or "unknown",
-                        self.pipeline.segmentor_model_name,
-                        self.pipeline.segmentor_concept or "")
-                except Exception as e:
-                    print(f"[{i+1}/{total}] Failed to load masks for {filename}: {e}")
-                    existing_masks = []
-
-                if existing_masks:
-                    proc_results = self.pipeline.process_with_masks(image, existing_masks)
-                    mask_reused = True
+                mask_reused, masks = self._ensure_masks(image, post_id, source)
+                if mask_reused:
                     masks_reused_count += 1
                 else:
-                    proc_results = self.pipeline.process(image)
-                    mask_reused = False
                     masks_generated_count += 1
 
+                proc_results = self.pipeline.process_with_masks(image, masks)
                 for j, proc_result in enumerate(proc_results):
-                    seg_name = f"{post_id}_seg_{j}"
-                    if not mask_reused and proc_result.segmentation.mask is not None:
-                        self.mask_storage.save_mask(
-                            proc_result.segmentation.mask, seg_name,
-                            source=source or "unknown",
-                            model=proc_result.segmentor_model,
-                            concept=proc_result.segmentor_concept or "")
                     if save_crops and proc_result.isolated_crop:
+                        seg_name = f"{post_id}_seg_{j}"
                         self._save_debug_crop(proc_result.isolated_crop, seg_name, source=source)
                     pending_embeddings.append(proc_result.embedding.reshape(1, -1))
                     pending_detections.append(make_detection(
@@ -304,6 +286,65 @@ class SAM3FursuitIdentifier:
         mask_msg = f", masks: {masks_reused_count} reused/{masks_generated_count} generated" if masks_reused_count or masks_generated_count else ""
         print(f"Ingestion complete: {added_count} embeddings added{skip_msg}{mask_msg} (index: {self.index.size})")
         return added_count
+
+    def regenerate_masks(
+        self,
+        image_paths: list[str],
+        source: str,
+    ) -> dict:
+        """Check masks for all images and regenerate missing/corrupt ones.
+
+        Bypasses the DB — only looks at mask storage and runs segmentation as needed.
+        """
+        total = len(image_paths)
+        ok = 0
+        regenerated = 0
+        failed = 0
+
+        for i, img_path in enumerate(image_paths):
+            post_id = self._extract_post_id(img_path)
+            filename = os.path.basename(img_path)
+            try:
+                image = self._load_image(img_path)
+                reused, masks = self._ensure_masks(image, post_id, source)
+                if reused:
+                    ok += 1
+                else:
+                    regenerated += 1
+                    print(f"[{i+1}/{total}] {filename}: generated {len(masks)} mask(s)")
+            except Exception as e:
+                failed += 1
+                print(f"[{i+1}/{total}] {filename}: FAILED ({e})")
+
+        print(f"\nMask check: {ok} ok, {regenerated} regenerated, {failed} failed (total: {total})")
+        return {"ok": ok, "regenerated": regenerated, "failed": failed, "total": total}
+
+    def _ensure_masks(self, image: Image.Image, post_id: str, source: str) -> tuple[bool, list[tuple[int, np.ndarray]]]:
+        """Check if masks exist and can be loaded; generate and save if missing.
+
+        Returns (reused, masks) where masks is list of (segment_index, mask_array).
+        """
+        model = self.pipeline.segmentor_model_name
+        concept = self.pipeline.segmentor_concept or ""
+        src = source or "unknown"
+
+        try:
+            existing = self.mask_storage.load_masks_for_post(post_id, src, model, concept)
+            if existing:
+                return True, existing
+        except Exception:
+            pass
+
+        results = self.pipeline.segmentor.segment(image)
+        masks = []
+        for j, seg in enumerate(results):
+            seg_name = f"{post_id}_seg_{j}"
+            if seg.mask is not None:
+                self.mask_storage.save_mask(
+                    seg.mask, seg_name, source=src,
+                    model=seg.segmentor, concept=concept)
+                masks.append((j, seg.mask))
+        return False, masks
 
     def _load_image(self, img_path: str) -> Image.Image:
         img_path = str(img_path)

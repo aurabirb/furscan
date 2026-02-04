@@ -88,6 +88,8 @@ Examples:
     ingest_parser.add_argument("--save-crops", action="store_true", help="Save crop images")
     ingest_parser.add_argument("--no-full", dest="add_full_image", action="store_false",
                                help="Don't add full image embedding (only segments)")
+    ingest_parser.add_argument("--regenerate-masks", action="store_true",
+                               help="Only check/regenerate missing masks (skip embedding and DB)")
     _add_classify_args(ingest_parser)
 
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
@@ -450,6 +452,11 @@ def ingest_from_directory(args):
             for img in images:
                 yield (character_name, img)
 
+    if args.regenerate_masks:
+        all_images = [str(img) for _, img in get_images()]
+        identifier.regenerate_masks(image_paths=all_images, source=source)
+        return
+
     for batch in batched(get_images(), batch_size):
         print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         names, images = zip(*batch)
@@ -582,6 +589,11 @@ def ingest_from_barq(args):
 
             for img in images:
                 yield (character_name, img)
+
+    if args.regenerate_masks:
+        all_images = [str(img) for _, img in get_images()]
+        identifier.regenerate_masks(image_paths=all_images, source=SOURCE_BARQ)
+        return
 
     for batch in batched(get_images(), batch_size):
         print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
