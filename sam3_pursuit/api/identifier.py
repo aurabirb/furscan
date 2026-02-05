@@ -325,7 +325,8 @@ class FursuitIngestor:
             raise ValueError()
         return img
 
-    def _extract_post_id(self, img_path: str) -> str:
+    @staticmethod
+    def _extract_post_id(img_path: str) -> str:
         basename = os.path.basename(img_path)
         return os.path.splitext(basename)[0]
 

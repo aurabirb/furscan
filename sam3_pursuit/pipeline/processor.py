@@ -33,7 +33,7 @@ class ProcessingResult:
     mask_reused: bool = False
 
 
-class ProcessingPipeline:
+class CachedProcessingPipeline:
     """Segment, isolate, and embed an image."""
 
     def __init__(
@@ -42,8 +42,10 @@ class ProcessingPipeline:
         isolation_config: Optional[IsolationConfig] = None,
         segmentor_model_name: Optional[str] = "",
         segmentor_concept: Optional[str] = "",
+        mask_storage = MaskStorage(),
     ):
         self.device = device or Config.get_device()
+        self.mask_storage = mask_storage
         segmentor_device = Config.get_segmentor_device()
         if segmentor_model_name == Config.SAM3_MODEL:
             self.segmentor = SAM3FursuitSegmentor(device=segmentor_device, concept=segmentor_concept)
@@ -59,10 +61,6 @@ class ProcessingPipeline:
     def process(self, image: Image.Image, cache_key: Optional[CacheKey] = None) -> list[ProcessingResult]:
         segmentations, mask_reused = self._segment(image, cache_key)
         return self._process_segmentations(segmentations, mask_reused)
-
-    def _segment(self, image: Image.Image, cache_key: Optional[CacheKey] = None) -> tuple[list[SegmentationResult], bool]:
-        segmentations = self.segmentor.segment(image)
-        return segmentations, False
 
     def _process_segmentations(self, segmentations: list[SegmentationResult], mask_reused: bool) -> list[ProcessingResult]:
         proc_results = []
@@ -91,14 +89,6 @@ class ProcessingPipeline:
         new_w = max(Config.PATCH_SIZE, (new_w // Config.PATCH_SIZE) * Config.PATCH_SIZE)
         new_h = max(Config.PATCH_SIZE, (new_h // Config.PATCH_SIZE) * Config.PATCH_SIZE)
         return image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
-
-class CachedProcessingPipeline(ProcessingPipeline):
-    """ProcessingPipeline with mask caching via MaskStorage."""
-
-    def __init__(self, mask_storage: Optional[MaskStorage] = None, **kwargs):
-        super().__init__(**kwargs)
-        self.mask_storage = mask_storage or MaskStorage()
 
     def _segment(self, image: Image.Image, cache_key: Optional[CacheKey] = None) -> tuple[list[SegmentationResult], bool]:
         if cache_key is not None:

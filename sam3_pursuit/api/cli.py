@@ -44,8 +44,6 @@ Examples:
                         help=f"Dataset name (default: {Config.DEFAULT_DATASET}). Sets db/index paths to <name>.db/<name>.index")
     parser.add_argument("--no-segment", "-S", dest="segment", action="store_false", help="Do not use segmentation")
     parser.add_argument("--concept", default=Config.DEFAULT_CONCEPT, help="SAM3 concept")
-    parser.add_argument("--regenerate-masks", action="store_true", help="Force segment mask regeneration")
-
     parser.add_argument("--background", "-bg", default=Config.DEFAULT_BACKGROUND_MODE,
                         choices=["none", "solid", "blur"],
                         help="Background isolation mode (default: solid)")
@@ -96,9 +94,10 @@ Examples:
     stats_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     segment_parser = subparsers.add_parser("segment", help="Test segmentation on an image")
-    segment_parser.add_argument("image", help="Path to image file")
+    segment_parser.add_argument("images", nargs="+", help="Image paths")
     segment_parser.add_argument("--output-dir", "-o", help="Output directory for crops")
-    segment_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    segment_parser.add_argument("--cache", action="store_true", help="Read and write segments cache")
+    segment_parser.add_argument("--source", "-s", required='--cache' in sys.argv, choices=SOURCES_AVAILABLE)
 
     classify_parser = subparsers.add_parser("classify", help="Classify images as fursuit or not")
     classify_parser.add_argument("path", help="Path to image file or directory")
@@ -453,13 +452,9 @@ def ingest_from_directory(args):
                 yield (character_name, img)
 
     for batch in batched(get_images(), batch_size):
+        print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         names, images = zip(*batch)
         add_full_image = getattr(args, "add_full_image", True)
-        if args.regenerate_masks:
-            print(f"[{total_added}] Batch regenerating masks for {len(batch)} images...")
-            ingestor.regenerate_mask_cache(list(images), source)
-            continue
-        print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         added = ingestor.add_images(
             character_names=list(names),
             image_paths=[str(p) for p in images],
@@ -505,11 +500,6 @@ def ingest_from_nfc25(args):
         img_paths.append(str(images_dir / img_filename))
         if args.limit and total_added >= args.limit:
             break
-
-    if args.regenerate_masks:
-        print(f"[{total_added}] Batch regenerating masks for {len(img_paths)} images...")
-        ingestor.regenerate_mask_cache(img_paths, SOURCE_NFC25)
-        return
 
     add_full_image = getattr(args, "add_full_image", True)
     added = ingestor.add_images(
@@ -598,10 +588,6 @@ def ingest_from_barq(args):
         print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
         names, images = zip(*batch)
         add_full_image = getattr(args, "add_full_image", True)
-        if args.regenerate_masks:
-            print(f"[{total_added}] Batch regenerating masks for {len(images)} images...")
-            ingestor.regenerate_mask_cache(list(images), SOURCE_BARQ)
-            continue
         added = ingestor.add_images(
             character_names=list(names),
             image_paths=[str(p) for p in images],
@@ -658,29 +644,41 @@ def stats_command(args):
 
 
 def segment_command(args):
-    from sam3_pursuit.models.segmentor import SAM3FursuitSegmentor
-
-    image_path = Path(args.image)
-    if not image_path.exists():
-        print(f"Error: Image not found: {image_path}")
-        sys.exit(1)
+    from sam3_pursuit.pipeline.processor import CacheKey, CachedProcessingPipeline
+    from sam3_pursuit.api.identifier import FursuitIngestor
+    from glob import glob
 
     concept = getattr(args, "concept", None) or Config.DEFAULT_CONCEPT
-    segmentor = SAM3FursuitSegmentor(concept=concept)
-    results = segmentor.segment(Image.open(image_path))
+    source = args.source or "unknown"
+    pipeline = CachedProcessingPipeline(segmentor_concept=concept, segmentor_model_name=Config.SAM3_MODEL)
+    images = sum([glob(f"{p}/**", recursive=True) if Path(p).is_dir() else [p] for p in args.images], [])
+    images = [p for p in images if not Path(p).is_dir()]
+    for n, image_path in enumerate(images):
+        progress = f"[{n+1}/{len(images)}]"
+        image_path = Path(image_path)
+        print(f"{progress} Segmenting {image_path}")
+        if not image_path.exists():
+            print(f"{progress} Error: Image not found: {image_path}")
+            sys.exit(1)
 
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for i, r in enumerate(results):
-            crop_path = output_dir / f"{image_path.stem}_crop_{i}.jpg"
-            r.crop.save(crop_path)
-            print(f"Saved: {crop_path}")
+        post_id = FursuitIngestor._extract_post_id(str(image_path))
+        cache_key = None if not args.cache else CacheKey(post_id, source)
+        try:
+            image = Image.open(image_path)
+            results, mask_reused = pipeline._segment(image, cache_key)
+        except Exception as e:
+            print(f"Error: {e}")
 
-    if args.json:
-        print(json.dumps([{"bbox": list(r.bbox), "confidence": r.confidence} for r in results], indent=2))
-    else:
-        print(f"Found {len(results)} segment(s)")
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for i, r in enumerate(results):
+                crop_path = output_dir / f"{image_path.stem}_crop_{i}.jpg"
+                r.crop.save(crop_path)
+                print(f"Saved crop: {crop_path}")
+
+        mask_msg = " (mask reused)" if mask_reused else ""
+        print(f"{progress} Found {len(results)} segment(s){mask_msg}")
         for i, r in enumerate(results):
             print(f"  {i+1}: bbox={r.bbox}, conf={r.confidence:.0%}")
 
@@ -750,7 +748,7 @@ def download_command(args):
         if not getattr(args, "exclude_datasets", None):
             args.exclude_datasets = Config.DEFAULT_DATASET
 
-    excluded_post_ids = _get_excluded_post_ids(getattr(args, "exclude_datasets", None))
+    excluded_post_ids = _get_excluded_post_ids(getattr(args, "exclude_datasets", ""))
 
     if args.source == "furtrack":
         from tools import download_furtrack
