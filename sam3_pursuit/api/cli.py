@@ -419,8 +419,6 @@ def ingest_command(args):
 
 def ingest_from_directory(args):
     """Ingest images from directory structure: data_dir/character_name/*.jpg"""
-    from itertools import batched
-    batch_size = 100
 
     ingestor = _get_ingestor(args)
     data_dir = Path(args.data_dir)
@@ -435,7 +433,6 @@ def ingest_from_directory(args):
         sys.exit(1)
     source = args.source
 
-    total_added = 0
     def get_images():
         for char_dir in sorted(data_dir.iterdir()):
             if not char_dir.is_dir():
@@ -451,22 +448,19 @@ def ingest_from_directory(args):
             for img in images:
                 yield (character_name, img)
 
-    for batch in batched(get_images(), batch_size):
-        print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
-        names, images = zip(*batch)
-        add_full_image = getattr(args, "add_full_image", True)
-        added = ingestor.add_images(
-            character_names=list(names),
-            image_paths=[str(p) for p in images],
-            save_crops=args.save_crops,
-            source=source,
-            add_full_image=add_full_image,
-            skip_non_fursuit=args.skip_non_fursuit,
-            classify_threshold=args.threshold,
-        )
-        total_added += added
+    names, images = zip(*get_images())
+    add_full_image = getattr(args, "add_full_image", True)
+    added = ingestor.add_images(
+        character_names=list(names),
+        image_paths=[str(p) for p in images],
+        save_crops=args.save_crops,
+        source=source,
+        add_full_image=add_full_image,
+        skip_non_fursuit=args.skip_non_fursuit,
+        classify_threshold=args.threshold,
+    )
 
-    print(f"\nTotal: Added {total_added} images")
+    print(f"\nTotal: Added {added} images")
 
 
 def ingest_from_nfc25(args):
@@ -523,18 +517,14 @@ def ingest_from_barq(args):
     Image UUIDs are used as post_ids (extracted from filename automatically).
     Profile metadata can be looked up from barq_cache.db if needed.
     """
-    from itertools import batched
     from sam3_pursuit.storage.database import SOURCE_BARQ
 
-    batch_size = 100
     ingestor = _get_ingestor(args)
     data_dir = Path(args.data_dir)
 
     if not data_dir.exists():
         print(f"Error: Data directory not found: {data_dir}")
         sys.exit(1)
-
-    total_added = 0
 
     # Names that are placeholders from Barq's API (not real character names)
     placeholder_names = {"likes only", "liked only", "private", "mutuals only"}
@@ -584,22 +574,19 @@ def ingest_from_barq(args):
             for img in images:
                 yield (character_name, img)
 
-    for batch in batched(get_images(), batch_size):
-        print(f"[{total_added}] Batch adding {len(batch)} images to the index...")
-        names, images = zip(*batch)
-        add_full_image = getattr(args, "add_full_image", True)
-        added = ingestor.add_images(
-            character_names=list(names),
-            image_paths=[str(p) for p in images],
-            save_crops=args.save_crops,
-            source=SOURCE_BARQ,
-            add_full_image=add_full_image,
-            skip_non_fursuit=args.skip_non_fursuit,
-            classify_threshold=args.threshold,
-        )
-        total_added += added
+    names, images = zip(*get_images())
+    add_full_image = getattr(args, "add_full_image", True)
+    added = ingestor.add_images(
+        character_names=list(names),
+        image_paths=[str(p) for p in images],
+        save_crops=args.save_crops,
+        source=SOURCE_BARQ,
+        add_full_image=add_full_image,
+        skip_non_fursuit=args.skip_non_fursuit,
+        classify_threshold=args.threshold,
+    )
 
-    print(f"\nTotal: Added {total_added} images from Barq")
+    print(f"\nTotal: Added {added} images from Barq")
 
 
 def stats_command(args):
