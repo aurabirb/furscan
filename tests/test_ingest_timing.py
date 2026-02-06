@@ -76,6 +76,9 @@ class TestIngestTiming(unittest.TestCase):
         """Time full ingestion pipeline with pre-computed masks."""
         from sam3_pursuit.api.identifier import FursuitIngestor
 
+        # Point mask storage at our pre-computed masks
+        mask_storage = MaskStorage(base_dir=self.mask_dir)
+
         # --- Phase 1: Identifier initialization ---
         t0 = time.perf_counter()
         identifier = FursuitIngestor(
@@ -83,9 +86,9 @@ class TestIngestTiming(unittest.TestCase):
             index_path=self.index_path,
             segmentor_model_name=Config.SAM3_MODEL,
             segmentor_concept=Config.DEFAULT_CONCEPT,
+            mask_storage=mask_storage,
         )
-        # Point mask storage at our pre-computed masks
-        identifier.pipeline.mask_storage = MaskStorage(base_dir=self.mask_dir)
+
         t_init = time.perf_counter() - t0
 
         # --- Phase 2: Ingestion ---

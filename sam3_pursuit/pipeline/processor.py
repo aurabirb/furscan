@@ -31,6 +31,7 @@ class ProcessingResult:
     segmentor_model: str = "unknown"
     segmentor_concept: Optional[str] = None
     mask_reused: bool = False
+    preprocessing_info: str = ""
 
 
 class CachedProcessingPipeline:
@@ -51,20 +52,47 @@ class CachedProcessingPipeline:
             self.segmentor = SAM3FursuitSegmentor(device=segmentor_device, concept=segmentor_concept)
         else:
             self.segmentor = FullImageSegmentor()
-        self.segmentor_model_name = self.segmentor.model_name
         self.segmentor_concept = segmentor_concept or ""
         self.embedder_model_name = Config.DINOV2_MODEL
         self.embedder = FursuitEmbedder(device=self.device, model_name=self.embedder_model_name)
         self.isolator = BackgroundIsolator(isolation_config)
         self.isolation_config = self.isolator.config
 
+
+    def _short_embedder_name(self) -> str:
+        emb = self.embedder_model_name
+        if "dinov2-base" in emb:
+            return "dv2b"
+        elif "dinov2-large" in emb:
+            return "dv2l"
+        elif "dinov2-giant" in emb:
+            return "dv2g"
+        return emb.split("/")[-1][:8]
+
+    def build_preprocessing_info(self) -> str:
+        """Build fingerprint for pipeline."""
+        parts = ["v2", f"seg:{self.segmentor.model_name}"]
+        if self.segmentor.model_name != "full":
+            iso = self.isolation_config
+            mode_map = {"solid": "s", "blur": "b", "none": "n"}
+            parts += [
+                f"con:{(self.segmentor_concept or '').replace('|', '.')}",
+                f"bg:{mode_map.get(iso.mode, 'n')}",
+            ]
+            if iso.mode == "solid":
+                r, g, b = iso.background_color
+                parts += [f"bgc:{r:02x}{g:02x}{b:02x}"]
+            elif iso.mode == "blur":
+                parts += [f"br:{iso.blur_radius}"]
+        parts += [f"emb:{self._short_embedder_name()}", f"tsz:{Config.TARGET_IMAGE_SIZE}"]
+        return "|".join(parts)
+
+
     def process(self, image: Image.Image, cache_key: Optional[CacheKey] = None) -> list[ProcessingResult]:
         segmentations, mask_reused = self._segment(image, cache_key)
-        return self._process_segmentations(segmentations, mask_reused)
-
-    def _process_segmentations(self, segmentations: list[SegmentationResult], mask_reused: bool) -> list[ProcessingResult]:
         proc_results = []
         for seg in segmentations:
+            preprocessing_info = self.build_preprocessing_info()
             isolated = self.isolator.isolate(seg.crop, seg.crop_mask)
             isolated_crop = self._resize_to_patch_multiple(isolated)
             embedding = self.embedder.embed(isolated_crop)
@@ -75,6 +103,7 @@ class CachedProcessingPipeline:
                 segmentor_model=seg.segmentor,
                 segmentor_concept=self.segmentor_concept,
                 mask_reused=mask_reused,
+                preprocessing_info=preprocessing_info,
             ))
         return proc_results
 
@@ -94,7 +123,7 @@ class CachedProcessingPipeline:
         if cache_key is not None:
             segmentations = self._load_segments_for_post(
                 cache_key.post_id, cache_key.source,
-                self.segmentor_model_name, self.segmentor_concept, image,
+                self.segmentor.model_name, self.segmentor_concept, image,
             )
             if segmentations:
                 return segmentations, True
@@ -103,10 +132,11 @@ class CachedProcessingPipeline:
 
         if cache_key is not None:
             try:
-                self._save_segments_for_post(
-                    cache_key.post_id, cache_key.source,
-                    self.segmentor_model_name, self.segmentor_concept, segmentations,
-                )
+                masks = [seg.mask for seg in segmentations if seg.mask is not None]
+                if masks:
+                    self.mask_storage.save_masks_for_post(cache_key.post_id, cache_key.source, self.segmentor.model_name, self.segmentor_concept, masks)
+                else:
+                    self.mask_storage.save_no_segments_marker(cache_key.post_id, cache_key.source, self.segmentor.model_name, self.segmentor_concept)
             except Exception as e:
                 print(f"Failed to save segments for {cache_key.post_id}: {e}")
 
@@ -117,14 +147,7 @@ class CachedProcessingPipeline:
             return FullImageSegmentor().segment(image)
         masks = self.mask_storage.load_masks_for_post(post_id, source, model, concept)
         segmentations = [
-            SegmentationResult.from_mask(image, mask, segmentor=self.segmentor_model_name) for mask in masks
+            SegmentationResult.from_mask(image, mask, segmentor=self.segmentor.model_name) for mask in masks
         ]
         segmentations = [s for s in segmentations if s]
         return segmentations
-
-    def _save_segments_for_post(self, post_id: str, source: str, model: str, concept: str, segmentations: list[SegmentationResult]) -> None:
-        masks = [seg.mask for seg in segmentations if seg.mask is not None]
-        if masks:
-            self.mask_storage.save_masks_for_post(post_id, source, self.segmentor_model_name, self.segmentor_concept, masks)
-        else:
-            self.mask_storage.save_no_segments_marker(post_id, source, self.segmentor_model_name, self.segmentor_concept)

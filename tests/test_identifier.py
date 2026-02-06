@@ -599,13 +599,13 @@ class TestMaskReuse(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "test.db")
             index_path = os.path.join(tmpdir, "test.index")
+            mask_storage=MaskStorage(base_dir=tmpdir)
             ingestor = FursuitIngestor(
                 db_path=db_path, index_path=index_path,
                 segmentor_model_name=Config.SAM3_MODEL,
                 segmentor_concept="fursuiter head",
+                mask_storage=mask_storage,
             )
-            storage = MaskStorage(base_dir=tmpdir)
-            ingestor.pipeline.mask_storage = storage
 
             # Run fresh processing (no cache_key → no caching)
             fresh_results = ingestor.pipeline.process(image)
@@ -613,7 +613,7 @@ class TestMaskReuse(unittest.TestCase):
 
             # Save full masks for bbox computation
             for i, result in enumerate(fresh_results):
-                storage.save_mask(
+                mask_storage.save_mask(
                     result.segmentation.mask,
                     f"test_seg_{i}",
                     "test", Config.SAM3_MODEL, "fursuiter head"

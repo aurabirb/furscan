@@ -10,10 +10,10 @@ from PIL import Image
 
 from sam3_pursuit.config import Config
 from sam3_pursuit.models.preprocessor import IsolationConfig
-from sam3_pursuit.models.segmentor import FullImageSegmentor
 from sam3_pursuit.pipeline.processor import CacheKey, CachedProcessingPipeline
 from sam3_pursuit.storage.database import Database, Detection
 from sam3_pursuit.storage.vector_index import VectorIndex
+from sam3_pursuit.storage.mask_storage import MaskStorage
 
 
 @dataclass
@@ -43,6 +43,7 @@ class FursuitIngestor:
         isolation_config: Optional[IsolationConfig] = None,
         segmentor_model_name: Optional[str] = "",
         segmentor_concept: Optional[str] = "",
+        mask_storage = MaskStorage(),
     ):
         self.db = Database(db_path)
         self.index = VectorIndex(index_path)
@@ -52,6 +53,14 @@ class FursuitIngestor:
             isolation_config=isolation_config,
             segmentor_model_name=segmentor_model_name,
             segmentor_concept=segmentor_concept,
+            mask_storage=mask_storage,
+        )
+        self.fallback_pipeline = CachedProcessingPipeline(
+            device=device,
+            isolation_config=isolation_config,
+            segmentor_model_name="full",
+            segmentor_concept="",
+            mask_storage=mask_storage,
         )
 
 
@@ -63,37 +72,6 @@ class FursuitIngestor:
             deleted = self.db.delete_orphaned_detections(max_valid_id)
             if deleted > 0:
                 print(f"Sync: deleted {deleted} orphaned detections (embedding_id > {max_valid_id})")
-
-    def _short_embedder_name(self) -> str:
-        emb = self.pipeline.embedder_model_name
-        if "dinov2-base" in emb:
-            return "dv2b"
-        elif "dinov2-large" in emb:
-            return "dv2l"
-        elif "dinov2-giant" in emb:
-            return "dv2g"
-        return emb.split("/")[-1][:8]
-
-    def _build_preprocessing_info(self) -> str:
-        """Build fingerprint for segmented crops."""
-        parts = ["v2", f"seg:{self.pipeline.segmentor_model_name}"]
-        if self.pipeline.segmentor_model_name != "full":
-            iso = self.pipeline.isolation_config
-            mode_map = {"solid": "s", "blur": "b", "none": "n"}
-            parts += [
-                f"con:{(self.pipeline.segmentor_concept or '').replace('|', '.')}",
-                f"bg:{mode_map.get(iso.mode, 'n')}",
-            ]
-            if iso.mode == "solid":
-                r, g, b = iso.background_color
-                parts += [f"bgc:{r:02x}{g:02x}{b:02x}"]
-            elif iso.mode == "blur":
-                parts += [f"br:{iso.blur_radius}"]
-        parts += [f"emb:{self._short_embedder_name()}", f"tsz:{Config.TARGET_IMAGE_SIZE}"]
-        return "|".join(parts)
-
-    def _build_full_preprocessing_info(self) -> str:
-        return f"v2|seg:full|emb:{self._short_embedder_name()}|tsz:{Config.TARGET_IMAGE_SIZE}"
 
     def identify(
         self,
@@ -203,10 +181,8 @@ class FursuitIngestor:
         else:
             post_ids = [self._extract_post_id(p) for p in image_paths]
 
-        seg_preproc = self._build_preprocessing_info()
-        full_preproc = self._build_full_preprocessing_info()
-        posts_need_full = self.db.get_posts_needing_update(post_ids, full_preproc, source)
-        posts_need_seg = self.db.get_posts_needing_update(post_ids, seg_preproc, source)
+        posts_need_full = self.db.get_posts_needing_update(post_ids, self.fallback_pipeline.build_preprocessing_info(), source)
+        posts_need_seg = self.db.get_posts_needing_update(post_ids, self.pipeline.build_preprocessing_info(), source)
         posts_to_process = posts_need_seg if not add_full_image else posts_need_full | posts_need_seg
 
         print(f"Processing {len(posts_to_process)} posts ({len(posts_need_full)} need full, {len(posts_need_seg)} need seg)")
@@ -284,19 +260,18 @@ class FursuitIngestor:
             if not proc_results:
                 print(f"[{i+1}/{total}] No segments found for {filename}, adding full image as fallback")
             if not proc_results or add_full_image:
-                fallback_segs = FullImageSegmentor().segment(image)
-                proc_results += self.pipeline._process_segmentations(fallback_segs, mask_reused=False)
+                proc_results += self.fallback_pipeline.process(image)
                 full_msg = " +full"
 
             for j, result in enumerate(proc_results):
-                if save_crops and result.isolated_crop and result.segmentor_model != "full":
-                    seg_name = f"{post_id}_seg_{j}"
+                if save_crops and result.isolated_crop:
+                    seg_name = f"{post_id}_seg_{j}" if result.segmentor_model != "full" else f"{post_id}_full"
                     self._save_debug_crop(result.isolated_crop, seg_name, source=source)
                 pending_embeddings.append(result.embedding.reshape(1, -1))
                 pending_detections.append(new_detection(
                     post_id, character_name, result.segmentation.bbox,
                     result.segmentation.confidence, result.segmentor_model,
-                    filename, seg_preproc if result.segmentor_model != "full" else full_preproc))
+                    filename, result.preprocessing_info))
 
             mask_msg = " (masks reused)" if mask_reused else ""
             print(f"[{i+1}/{total}] {character_name}: {len(proc_results)} segments{mask_msg}{full_msg}")
