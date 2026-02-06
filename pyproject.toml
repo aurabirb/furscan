@@ -16,6 +16,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "aiohttp>=3.13.3",
     "dotenv>=0.9.9",
+    "pytest>=9.0.2",
 ]
 
 [project.scripts]
