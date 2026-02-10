@@ -149,10 +149,11 @@ class TestIngestTiming(unittest.TestCase):
             post_id = self.post_ids[i]
 
             t = time.perf_counter()
-            masks = mask_storage.load_masks_for_post(post_id, "barq", Config.SAM3_MODEL, Config.DEFAULT_CONCEPT)
+            segs = mask_storage.load_segs_for_post(post_id, "barq", Config.SAM3_MODEL, Config.DEFAULT_CONCEPT)
             t_load_mask += time.perf_counter() - t
 
-            for mask in masks:
+            for seg in segs:
+                mask = seg.mask
                 t = time.perf_counter()
                 seg = SegmentationResult.from_mask(image, mask, segmentor=Config.SAM3_MODEL)
                 t_from_mask += time.perf_counter() - t

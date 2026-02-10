@@ -132,9 +132,9 @@ class CachedProcessingPipeline:
 
         if cache_key is not None:
             try:
-                masks = [seg.mask for seg in segmentations if seg.mask is not None]
-                if masks:
-                    self.mask_storage.save_masks_for_post(cache_key.post_id, cache_key.source, self.segmentor.model_name, self.segmentor_concept, masks)
+                segs = [seg for seg in segmentations if seg.mask is not None]
+                if segs:
+                    self.mask_storage.save_segs_for_post(cache_key.post_id, cache_key.source, self.segmentor.model_name, self.segmentor_concept, segs)
                 else:
                     self.mask_storage.save_no_segments_marker(cache_key.post_id, cache_key.source, self.segmentor.model_name, self.segmentor_concept)
             except Exception as e:
@@ -145,9 +145,9 @@ class CachedProcessingPipeline:
     def _load_segments_for_post(self, post_id: str, source: str, model: str, concept: str, image: Image.Image) -> list[SegmentationResult]:
         if self.mask_storage.has_no_segments_marker(post_id, source, model, concept):
             return FullImageSegmentor().segment(image)
-        masks = self.mask_storage.load_masks_for_post(post_id, source, model, concept)
+        segs = self.mask_storage.load_segs_for_post(post_id, source, model, concept)
         segmentations = [
-            SegmentationResult.from_mask(image, mask, segmentor=self.segmentor.model_name) for mask in masks
+            SegmentationResult.from_mask(image, seg.mask, segmentor=self.segmentor.model_name) for seg in segs
         ]
         segmentations = [s for s in segmentations if s]
         return segmentations

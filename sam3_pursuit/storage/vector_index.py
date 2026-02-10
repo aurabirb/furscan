@@ -22,7 +22,7 @@ class VectorIndex:
         self.ef_search = ef_search
         self.index = self._load_or_create_index()
 
-    def _load_or_create_index(self) -> faiss.Index:
+    def _load_or_create_index(self) -> faiss.IndexHNSWFlat:
         if os.path.exists(self.index_path):
             return faiss.read_index(self.index_path)
         index = faiss.IndexHNSWFlat(self.embedding_dim, self.hnsw_m)

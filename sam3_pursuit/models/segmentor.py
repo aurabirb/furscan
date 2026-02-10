@@ -7,8 +7,10 @@ from PIL import Image
 from sam3_pursuit.config import Config
 
 
-def mask_to_bbox(mask: np.ndarray) -> tuple[int, int, int, int] | None:
+def mask_to_bbox(mask: np.ndarray | None) -> tuple[int, int, int, int] | None:
     """Convert binary mask to bounding box (x, y, w, h)."""
+    if mask is None:
+        return None
     rows = np.any(mask, axis=1)
     cols = np.any(mask, axis=0)
     if not np.any(rows) or not np.any(cols):
@@ -57,7 +59,7 @@ class FullImageSegmentor:
     def __init__(self) -> None:
         self.model_name = "full"
 
-    def segment(self, image: Image.Image) -> list[SegmentationResult]:
+    def segment(self, image: Image.Image, confidence: float = 1.0) -> list[SegmentationResult]:
         # print("Using FullImageSegmentor: returning full image as single segment")
         w, h = image.size
         full_mask = np.ones((h, w), dtype=np.uint8)
@@ -66,7 +68,7 @@ class FullImageSegmentor:
             mask=full_mask,
             crop_mask=full_mask,
             bbox=(0, 0, w, h),
-            confidence=1.0,
+            confidence=confidence,
             segmentor=self.model_name,
         )]
 

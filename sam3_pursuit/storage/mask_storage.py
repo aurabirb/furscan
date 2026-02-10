@@ -3,11 +3,14 @@
 import re
 from pathlib import Path
 from typing import Optional
+import struct
 
 import numpy as np
 from PIL import Image
 
 from sam3_pursuit.config import Config
+from sam3_pursuit.models.segmentor import SegmentationResult, mask_to_bbox, create_crop_mask
+
 
 
 def _normalize_concept(concept: str) -> str:
@@ -57,25 +60,51 @@ class MaskStorage:
         Image.fromarray(mask, mode="L").save(path, optimize=True)
         return str(path)
 
-    def find_masks_for_post(self, post_id: str, source: str, model: str, concept: str) -> list[Path]:
+    def find_masks_for_post(self, post_id: str, source: str, model: str, concept: str):
         """Find all segment masks for a post_id ({post_id}_seg_*.png)."""
         mask_dir = self.get_mask_dir(source, model, concept)
-        if not mask_dir.exists():
-            return []
         return sorted(mask_dir.glob(f"{post_id}_seg_*.png"), key=lambda p: int(p.stem.split("_seg_")[-1]))
 
-    def load_masks_for_post(self, post_id: str, source: str, model: str, concept: str) -> list[np.ndarray]:
-        results = []
-        for i, path in enumerate(self.find_masks_for_post(post_id, source, model, concept)):
+    def load_segs_for_post(self, post_id: str, source: str, model: str, concept: str):
+        results: list[SegmentationResult] = []
+        confs: list[float] = []
+        mask_dir = self.get_mask_dir(source, model, concept)
+        conffile = Path(mask_dir / "confidences")
+        if conffile.exists():
+            with open(conffile, 'rb') as f:
+                content = f.read()
+                size = len(content) / struct.calcsize('d')
+                confs = list(struct.unpack(f'{size}d', content))
+        masks = self.find_masks_for_post(post_id, source, model, concept)
+        if len(masks) > 0 and len(confs) != len(masks):
+            print(f"WARN: confidence file mismatch: {conffile}")
+            confs = []
+        for i, path in enumerate(masks):
             name = path.stem
             seg_idx = int(name.split("_seg_")[-1])
             assert seg_idx == i, f"Missing segment index {i} in mask files"
-            results.append(self.load_mask(name, source, model, concept))
+            mask = self.load_mask(name, source, model, concept)
+            bbox = mask_to_bbox(mask)
+            if mask is None or bbox is None:
+                print(f"WARN: mask {i} is empty for {mask_dir}")
+                results.clear()
+                return results
+            crop_mask = create_crop_mask(mask, bbox)
+            results.append(SegmentationResult(
+                    crop=None,
+                    mask=mask.astype(np.uint8),
+                    crop_mask=crop_mask,
+                    bbox=bbox,
+                    confidence=confs[i] if confs else 1.0,
+                    segmentor=model,
+                ))
         return results
 
-    def save_masks_for_post(self, post_id: str, source: str, model: str, concept: str, masks: list[np.ndarray]) -> list[str]:
+    def save_segs_for_post(self, post_id: str, source: str, model: str, concept: str, segs: list[SegmentationResult]) -> list[str]:
         paths = []
-        for i, mask in enumerate(masks):
+        with open(self.get_mask_dir(source, model, concept) / "confidences", 'wb') as f:
+            f.write(bytearray(struct.pack(f'{len(segs)}d', [s.confidence for s in segs])))
+        for i, mask in enumerate([s.mask for s in segs]):
             name = f"{post_id}_seg_{i}"
             path = self.save_mask(mask, name, source, model, concept)
             paths.append(path)

@@ -569,7 +569,7 @@ class TestMaskReuse(unittest.TestCase):
             self.assertTrue(masks[1].name.endswith("_seg_1.png"))
             self.assertTrue(masks[2].name.endswith("_seg_2.png"))
 
-    def test_load_masks_for_post(self):
+    def test_load_segs_for_post(self):
         """Test loading all masks for a post_id."""
         from sam3_pursuit.storage.mask_storage import MaskStorage
 
@@ -581,11 +581,12 @@ class TestMaskReuse(unittest.TestCase):
                 mask = np.ones((50, 50), dtype=np.uint8) * (i + 1) * 100
                 storage.save_mask(mask, f"post456_seg_{i}", "barq", "sam3", "fursuiter head")
 
-            loaded = storage.load_masks_for_post("post456", "barq", "sam3", "fursuiter head")
+            loaded = storage.load_segs_for_post("post456", "barq", "sam3", "fursuiter head")
             self.assertEqual(len(loaded), 2)
             # Masks are returned as np.ndarray in segment order
-            self.assertIsInstance(loaded[0], np.ndarray)
-            self.assertIsInstance(loaded[1], np.ndarray)
+            self.assertIsInstance(loaded[0].mask, np.ndarray)
+            self.assertIsInstance(loaded[1].mask, np.ndarray)
+            self.assertLess(loaded[0].confidence, 1.0)
 
     @unittest.skipIf(not os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "blazi_wolf.1.jpg")), "Test image not found")
     def test_process_with_masks_matches_fresh_processing(self):
