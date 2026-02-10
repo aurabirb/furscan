@@ -572,21 +572,33 @@ class TestMaskReuse(unittest.TestCase):
     def test_load_segs_for_post(self):
         """Test loading all masks for a post_id."""
         from sam3_pursuit.storage.mask_storage import MaskStorage
+        from sam3_pursuit.models.segmentor import SegmentationResult
 
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = MaskStorage(base_dir=tmpdir)
 
-            # Save masks with different content
+            # Build SegmentationResults with confidence < 1.0
+            segs = []
             for i in range(2):
                 mask = np.ones((50, 50), dtype=np.uint8) * (i + 1) * 100
-                storage.save_mask(mask, f"post456_seg_{i}", "barq", "sam3", "fursuiter head")
+                bbox = (0, 0, 50, 50)
+                segs.append(SegmentationResult(
+                    crop=None,
+                    mask=mask,
+                    crop_mask=mask,
+                    bbox=bbox,
+                    confidence=0.8 - i * 0.1,
+                    segmentor="sam3",
+                ))
+            storage.save_segs_for_post("post456", "barq", "sam3", "fursuiter head", segs)
 
             loaded = storage.load_segs_for_post("post456", "barq", "sam3", "fursuiter head")
             self.assertEqual(len(loaded), 2)
             # Masks are returned as np.ndarray in segment order
             self.assertIsInstance(loaded[0].mask, np.ndarray)
             self.assertIsInstance(loaded[1].mask, np.ndarray)
-            self.assertLess(loaded[0].confidence, 1.0)
+            self.assertAlmostEqual(loaded[0].confidence, 0.8)
+            self.assertAlmostEqual(loaded[1].confidence, 0.7)
 
     @unittest.skipIf(not os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "blazi_wolf.1.jpg")), "Test image not found")
     def test_process_with_masks_matches_fresh_processing(self):
@@ -612,13 +624,11 @@ class TestMaskReuse(unittest.TestCase):
             fresh_results = ingestor.pipeline.process(image)
             self.assertGreater(len(fresh_results), 0, "Should detect at least one segment")
 
-            # Save full masks for bbox computation
-            for i, result in enumerate(fresh_results):
-                mask_storage.save_mask(
-                    result.segmentation.mask,
-                    f"test_seg_{i}",
-                    "test", Config.SAM3_MODEL, "fursuiter head"
-                )
+            # Save full segmentation results (masks + confidences)
+            mask_storage.save_segs_for_post(
+                "test", "test", Config.SAM3_MODEL, "fursuiter head",
+                [result.segmentation for result in fresh_results],
+            )
 
             # Reprocess using CacheKey (triggers mask cache load)
             cache_key = CacheKey(post_id="test", source="test")

@@ -105,7 +105,9 @@ class MaskStorage:
 
     def save_segs_for_post(self, post_id: str, source: str, model: str, concept: str, segs: list[SegmentationResult]) -> list[str]:
         paths = []
-        with open(self.get_mask_dir(source, model, concept) / f"{post_id}.conffile", 'wb') as f:
+        mask_dir = self.get_mask_dir(source, model, concept)
+        mask_dir.mkdir(parents=True, exist_ok=True)
+        with open(mask_dir / f"{post_id}.conffile", 'wb') as f:
             f.write(bytearray(struct.pack(f'{len(segs)}d', *[s.confidence for s in segs])))
         for i, mask in enumerate([s.mask for s in segs]):
             name = f"{post_id}_seg_{i}"
