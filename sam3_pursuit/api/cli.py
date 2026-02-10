@@ -532,7 +532,7 @@ def ingest_from_barq(args):
     def _resolve_barq_name(profile_id: str, fallback: str) -> str:
         """Try to resolve a better name from barq cache for placeholder names."""
         try:
-            from tools.download_barq import get_cached_profile, get_folder_name
+            from sam3_pursuit.tools.download_barq import get_cached_profile, get_folder_name
             cached = get_cached_profile(profile_id)
             if cached:
                 # Re-resolve using updated logic
@@ -744,7 +744,7 @@ def download_command(args):
     excluded_post_ids = _get_excluded_post_ids(getattr(args, "exclude_datasets", ""))
 
     if args.source == "furtrack":
-        from tools import download_furtrack
+        from sam3_pursuit.tools import download_furtrack
         if args.output_dir:
             download_furtrack.IMAGES_DIR = args.output_dir
         if excluded_post_ids:
@@ -760,7 +760,7 @@ def download_command(args):
 
     elif args.source == "barq":
         import asyncio
-        from tools import download_barq
+        from sam3_pursuit.tools import download_barq
         if args.output_dir:
             download_barq.IMAGES_DIR = args.output_dir
         if excluded_post_ids:
