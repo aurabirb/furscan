@@ -8,14 +8,23 @@ import pytest
 from sam3_pursuit.config import Config
 from sam3_pursuit.storage.database import Database, Detection
 from sam3_pursuit.storage.vector_index import VectorIndex
-from sam3_pursuit.api.cli import _copy_detections, _get_dataset_paths
+from sam3_pursuit.api.cli import (
+    _copy_detections,
+    _copy_dataset_files,
+    _get_dataset_dir,
+    _get_dataset_paths,
+    _get_source_subdirs,
+)
 
 
 @pytest.fixture
 def tmp_dir(tmp_path):
-    """Use tmp_path as the base for all dataset files."""
-    # Monkey-patch _get_dataset_paths to use tmp_path
-    original = _get_dataset_paths.__code__
+    """Use tmp_path as the base for all dataset files and image dirs."""
+    import sam3_pursuit.api.cli as cli_mod
+    from pathlib import Path
+
+    orig_get_paths = cli_mod._get_dataset_paths
+    orig_get_dir = cli_mod._get_dataset_dir
 
     def _patched_get_dataset_paths(dataset):
         return (
@@ -23,13 +32,16 @@ def tmp_dir(tmp_path):
             str(tmp_path / f"{dataset}.index"),
         )
 
-    import sam3_pursuit.api.cli as cli_mod
+    def _patched_get_dataset_dir(dataset):
+        if dataset == Config.DEFAULT_DATASET:
+            return tmp_path
+        return tmp_path / "datasets" / dataset
+
     cli_mod._get_dataset_paths = _patched_get_dataset_paths
+    cli_mod._get_dataset_dir = _patched_get_dataset_dir
     yield tmp_path
-    cli_mod._get_dataset_paths = staticmethod(lambda ds: (
-        os.path.join(os.path.dirname(Config.DB_PATH), f"{ds}.db") if ds != Config.DEFAULT_DATASET else Config.DB_PATH,
-        os.path.join(os.path.dirname(Config.DB_PATH), f"{ds}.index") if ds != Config.DEFAULT_DATASET else Config.INDEX_PATH,
-    ))
+    cli_mod._get_dataset_paths = orig_get_paths
+    cli_mod._get_dataset_dir = orig_get_dir
 
 
 def _make_dataset(tmp_path, name, detections_data):
@@ -438,3 +450,245 @@ class TestSplitAndRecombine:
 
         orig_db.close()
         unshard_db.close()
+
+
+def _make_image_files(base_dir, source_name, characters, is_default=False):
+    """Create dummy image files for a dataset.
+
+    characters: dict of {char_name: [post_id, ...]}
+    Returns list of created file paths.
+    """
+    if is_default:
+        source_dir = base_dir / f"{source_name}_images"
+    else:
+        source_dir = base_dir / source_name
+    paths = []
+    for char_name, post_ids in characters.items():
+        char_dir = source_dir / char_name
+        char_dir.mkdir(parents=True, exist_ok=True)
+        for post_id in post_ids:
+            img = char_dir / f"{post_id}.jpg"
+            img.write_bytes(b"fake image data")
+            paths.append(img)
+    return paths
+
+
+class TestCopyDatasetFiles:
+    def test_basic_copy(self, tmp_path, tmp_dir):
+        """Test copying all files from a non-default dataset."""
+        src_dir = tmp_path / "datasets" / "ds_a"
+        _make_image_files(src_dir, "furtrack", {"CharA": ["p1", "p2"], "CharB": ["p3"]})
+
+        copied = _copy_dataset_files("ds_a", "ds_out")
+        assert copied == 3
+
+        out_dir = tmp_path / "datasets" / "ds_out"
+        assert (out_dir / "furtrack" / "CharA" / "p1.jpg").exists()
+        assert (out_dir / "furtrack" / "CharA" / "p2.jpg").exists()
+        assert (out_dir / "furtrack" / "CharB" / "p3.jpg").exists()
+
+    def test_filter_by_source(self, tmp_path, tmp_dir):
+        """Test filtering by source subdir."""
+        src_dir = tmp_path / "datasets" / "ds_b"
+        _make_image_files(src_dir, "furtrack", {"CharA": ["p1"]})
+        _make_image_files(src_dir, "barq", {"CharA": ["p2"]})
+
+        copied = _copy_dataset_files("ds_b", "ds_out2", by_source="furtrack")
+        assert copied == 1
+
+        out_dir = tmp_path / "datasets" / "ds_out2"
+        assert (out_dir / "furtrack" / "CharA" / "p1.jpg").exists()
+        assert not (out_dir / "barq").exists()
+
+    def test_filter_by_character(self, tmp_path, tmp_dir):
+        """Test filtering by character name."""
+        src_dir = tmp_path / "datasets" / "ds_c"
+        _make_image_files(src_dir, "furtrack", {"CharA": ["p1"], "CharB": ["p2"], "CharC": ["p3"]})
+
+        copied = _copy_dataset_files("ds_c", "ds_out3", by_character="CharA,CharC")
+        assert copied == 2
+
+        out_dir = tmp_path / "datasets" / "ds_out3"
+        assert (out_dir / "furtrack" / "CharA" / "p1.jpg").exists()
+        assert not (out_dir / "furtrack" / "CharB").exists()
+        assert (out_dir / "furtrack" / "CharC" / "p3.jpg").exists()
+
+    def test_sharding(self, tmp_path, tmp_dir):
+        """Test that sharding splits files deterministically."""
+        src_dir = tmp_path / "datasets" / "ds_d"
+        posts = [f"post{i}" for i in range(10)]
+        _make_image_files(src_dir, "furtrack", {"CharA": posts})
+
+        all_copied = set()
+        for shard_idx in range(3):
+            copied = _copy_dataset_files(
+                "ds_d", f"ds_shard_{shard_idx}",
+                shard_idx=shard_idx, shards=3,
+            )
+            out_dir = tmp_path / "datasets" / f"ds_shard_{shard_idx}" / "furtrack" / "CharA"
+            if out_dir.exists():
+                shard_files = {f.stem for f in out_dir.iterdir()}
+                all_copied.update(shard_files)
+
+        assert all_copied == set(posts)
+
+    def test_skip_existing(self, tmp_path, tmp_dir):
+        """Test that existing files are not overwritten."""
+        src_dir = tmp_path / "datasets" / "ds_e"
+        _make_image_files(src_dir, "furtrack", {"CharA": ["p1"]})
+
+        # Pre-create target file
+        out_dir = tmp_path / "datasets" / "ds_out4" / "furtrack" / "CharA"
+        out_dir.mkdir(parents=True)
+        existing = out_dir / "p1.jpg"
+        existing.write_bytes(b"original")
+
+        copied = _copy_dataset_files("ds_e", "ds_out4")
+        assert copied == 0
+        assert existing.read_bytes() == b"original"
+
+    def test_default_dataset_dirs(self, tmp_path, tmp_dir):
+        """Test copying from default dataset (source_images dirs at root)."""
+        _make_image_files(tmp_path, "furtrack", {"CharA": ["p1"]}, is_default=True)
+        _make_image_files(tmp_path, "barq", {"CharB": ["p2"]}, is_default=True)
+
+        copied = _copy_dataset_files(Config.DEFAULT_DATASET, "ds_from_default")
+        assert copied == 2
+
+        out_dir = tmp_path / "datasets" / "ds_from_default"
+        assert (out_dir / "furtrack" / "CharA" / "p1.jpg").exists()
+        assert (out_dir / "barq" / "CharB" / "p2.jpg").exists()
+
+    def test_copy_to_default_dataset(self, tmp_path, tmp_dir):
+        """Test copying into default dataset (creates source_images dirs)."""
+        src_dir = tmp_path / "datasets" / "ds_f"
+        _make_image_files(src_dir, "furtrack", {"CharA": ["p1"]})
+
+        copied = _copy_dataset_files("ds_f", Config.DEFAULT_DATASET)
+        assert copied == 1
+        assert (tmp_path / "furtrack_images" / "CharA" / "p1.jpg").exists()
+
+    def test_empty_source(self, tmp_path, tmp_dir):
+        """Test copying from nonexistent source dir."""
+        copied = _copy_dataset_files("nonexistent", "ds_out5")
+        assert copied == 0
+
+
+class TestCombineWithFiles:
+    def test_combine_files_only(self, tmp_path, tmp_dir):
+        """Test combining datasets that have only image files, no DB."""
+        import argparse
+        from sam3_pursuit.api.cli import combine_command
+
+        src_a = tmp_path / "datasets" / "files_a"
+        src_b = tmp_path / "datasets" / "files_b"
+        _make_image_files(src_a, "furtrack", {"CharA": ["p1"]})
+        _make_image_files(src_b, "barq", {"CharB": ["p2"]})
+
+        args = argparse.Namespace(datasets=["files_a", "files_b"], output="files_merged")
+        combine_command(args)
+
+        out_dir = tmp_path / "datasets" / "files_merged"
+        assert (out_dir / "furtrack" / "CharA" / "p1.jpg").exists()
+        assert (out_dir / "barq" / "CharB" / "p2.jpg").exists()
+
+    def test_combine_db_and_files(self, tmp_path, tmp_dir):
+        """Test combining datasets with both DB and image files."""
+        import argparse
+        from sam3_pursuit.api.cli import combine_command
+
+        # Create DB datasets
+        _make_dataset(tmp_path, "dbfiles_a", [
+            ("p1", "CharA", "furtrack", "solid_128"),
+        ])
+        _make_dataset(tmp_path, "dbfiles_b", [
+            ("p2", "CharB", "barq", "solid_128"),
+        ])
+
+        # Create image files
+        src_a = tmp_path / "datasets" / "dbfiles_a"
+        src_b = tmp_path / "datasets" / "dbfiles_b"
+        _make_image_files(src_a, "furtrack", {"CharA": ["p1"]})
+        _make_image_files(src_b, "barq", {"CharB": ["p2"]})
+
+        args = argparse.Namespace(datasets=["dbfiles_a", "dbfiles_b"], output="dbfiles_merged")
+        combine_command(args)
+
+        # Verify DB
+        merged_db = Database(str(tmp_path / "dbfiles_merged.db"))
+        dets = _get_all_detections(merged_db)
+        assert len(dets) == 2
+        merged_db.close()
+
+        # Verify files
+        out_dir = tmp_path / "datasets" / "dbfiles_merged"
+        assert (out_dir / "furtrack" / "CharA" / "p1.jpg").exists()
+        assert (out_dir / "barq" / "CharB" / "p2.jpg").exists()
+
+
+class TestSplitWithFiles:
+    def test_split_files_only(self, tmp_path, tmp_dir):
+        """Test splitting dataset with only image files, no DB."""
+        import argparse
+        from sam3_pursuit.api.cli import split_command
+
+        src = tmp_path / "datasets" / "files_src"
+        _make_image_files(src, "furtrack", {"CharA": ["p1", "p2"]})
+        _make_image_files(src, "barq", {"CharB": ["p3"]})
+
+        args = argparse.Namespace(
+            source_dataset="files_src",
+            output="files_ft",
+            by_source="furtrack",
+            by_character=None,
+            shards=1,
+        )
+        split_command(args)
+
+        out_dir = tmp_path / "datasets" / "files_ft"
+        assert (out_dir / "furtrack" / "CharA" / "p1.jpg").exists()
+        assert (out_dir / "furtrack" / "CharA" / "p2.jpg").exists()
+        assert not (out_dir / "barq").exists()
+
+    def test_split_files_by_character(self, tmp_path, tmp_dir):
+        """Test splitting files by character name."""
+        import argparse
+        from sam3_pursuit.api.cli import split_command
+
+        src = tmp_path / "datasets" / "char_src"
+        _make_image_files(src, "furtrack", {"CharA": ["p1"], "CharB": ["p2"], "CharC": ["p3"]})
+
+        args = argparse.Namespace(
+            source_dataset="char_src",
+            output="char_out",
+            by_source=None,
+            by_character="CharA,CharC",
+            shards=1,
+        )
+        split_command(args)
+
+        out_dir = tmp_path / "datasets" / "char_out"
+        assert (out_dir / "furtrack" / "CharA" / "p1.jpg").exists()
+        assert not (out_dir / "furtrack" / "CharB").exists()
+        assert (out_dir / "furtrack" / "CharC" / "p3.jpg").exists()
+
+    def test_split_source_unchanged(self, tmp_path, tmp_dir):
+        """Test that source files are unchanged after split."""
+        import argparse
+        from sam3_pursuit.api.cli import split_command
+
+        src = tmp_path / "datasets" / "src_intact"
+        _make_image_files(src, "furtrack", {"CharA": ["p1", "p2"]})
+
+        args = argparse.Namespace(
+            source_dataset="src_intact",
+            output="split_out",
+            by_source="furtrack",
+            by_character=None,
+            shards=1,
+        )
+        split_command(args)
+
+        # Source files still there
+        assert (src / "furtrack" / "CharA" / "p1.jpg").exists()
+        assert (src / "furtrack" / "CharA" / "p2.jpg").exists()

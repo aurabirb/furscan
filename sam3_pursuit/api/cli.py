@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -19,6 +20,96 @@ def _get_dataset_paths(dataset: str) -> tuple[str, str]:
         return Config.DB_PATH, Config.INDEX_PATH
     base_dir = os.path.dirname(Config.DB_PATH)
     return os.path.join(base_dir, f"{dataset}.db"), os.path.join(base_dir, f"{dataset}.index")
+
+
+def _get_dataset_dir(dataset: str) -> Path:
+    """Get the root image directory for a dataset.
+
+    Non-default datasets: datasets/{dataset}/
+    Default dataset: project root (sources are {source}_images/ dirs)
+    """
+    if dataset == Config.DEFAULT_DATASET:
+        return Path(Config.BASE_DIR)
+    return Path(Config.BASE_DIR) / "datasets" / dataset
+
+
+def _get_source_subdirs(dataset_dir: Path, dataset: str) -> list[tuple[str, Path]]:
+    """Get (source_name, path) pairs for all source subdirs in a dataset dir.
+
+    Non-default: datasets/{dataset}/{source}/ -> source = dir name
+    Default: {source}_images/ at project root -> source = name without _images
+    """
+    if not dataset_dir.is_dir():
+        return []
+    results = []
+    if dataset == Config.DEFAULT_DATASET:
+        for d in sorted(dataset_dir.iterdir()):
+            if d.is_dir() and d.name.endswith("_images"):
+                source_name = d.name.removesuffix("_images")
+                results.append((source_name, d))
+    else:
+        for d in sorted(dataset_dir.iterdir()):
+            if d.is_dir():
+                results.append((d.name, d))
+    return results
+
+
+def _copy_dataset_files(
+    source_dataset: str,
+    target_dataset: str,
+    by_source: str | None = None,
+    by_character: str | None = None,
+    shard_idx: int | None = None,
+    shards: int = 1,
+) -> int:
+    """Copy image files from source dataset dir to target dataset dir.
+
+    Filters by source subdir name and character dir name.
+    When shards > 1, filters by hash(image_stem) % shards == shard_idx.
+    Returns count of files copied.
+    """
+    src_dir = _get_dataset_dir(source_dataset)
+    tgt_dir = _get_dataset_dir(target_dataset)
+
+    source_subdirs = _get_source_subdirs(src_dir, source_dataset)
+    if by_source:
+        source_subdirs = [(name, path) for name, path in source_subdirs if name == by_source]
+
+    char_names = None
+    if by_character:
+        char_names = {c.strip() for c in by_character.split(",")}
+
+    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+    copied = 0
+
+    for source_name, source_path in source_subdirs:
+        # Determine target source subdir name
+        if target_dataset == Config.DEFAULT_DATASET:
+            tgt_source_dir = tgt_dir / f"{source_name}_images"
+        else:
+            tgt_source_dir = tgt_dir / source_name
+
+        for char_dir in sorted(source_path.iterdir()):
+            if not char_dir.is_dir():
+                continue
+            if char_names and char_dir.name not in char_names:
+                continue
+
+            for img_file in sorted(char_dir.iterdir()):
+                if img_file.suffix.lower() not in IMAGE_EXTS:
+                    continue
+                if shards > 1 and shard_idx is not None:
+                    if hash(img_file.stem) % shards != shard_idx:
+                        continue
+
+                dest = tgt_source_dir / char_dir.name / img_file.name
+                if dest.exists():
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(img_file, dest)
+                copied += 1
+
+    return copied
 
 
 def main():
@@ -964,6 +1055,29 @@ def evaluate_command(args):
                 print(f"  {bucket['range']}: {bucket['accuracy']:.1%} accurate (n={bucket['count']})")
 
 
+def _dataset_has_db(dataset: str) -> bool:
+    """Check if a dataset has both a .db and .index file."""
+    db_path, index_path = _get_dataset_paths(dataset)
+    return os.path.exists(db_path) and os.path.exists(index_path)
+
+
+def _fetch_detections(db, where_clause: str | None = None, params: list | None = None):
+    """Fetch detections from a database, optionally filtered."""
+    conn = db._connect()
+    cursor = conn.cursor()
+    query = f"SELECT {db._SELECT_FIELDS} FROM detections"
+    if where_clause:
+        query += f" WHERE {where_clause}"
+    query += " ORDER BY embedding_id"
+    cursor.execute(query, params or [])
+    return [db._row_to_detection(row) for row in cursor.fetchall()]
+
+
+def _shard_name(output: str, shard_idx: int, shards: int) -> str:
+    """Get the target dataset name for a shard."""
+    return output if shards == 1 else f"{output}_{shard_idx}"
+
+
 def _copy_detections(detections, source_index, target_db, target_index, batch_size=500):
     """Copy detections and their embeddings from source dataset to target dataset.
 
@@ -1043,53 +1157,58 @@ def combine_command(args):
     from sam3_pursuit.storage.database import Database
     from sam3_pursuit.storage.vector_index import VectorIndex
 
-    output_db_path, output_index_path = _get_dataset_paths(args.output)
-
-    # Verify source datasets exist
-    for ds_name in args.datasets:
-        db_path, index_path = _get_dataset_paths(ds_name)
-        if not os.path.exists(db_path):
-            print(f"Error: Dataset '{ds_name}' not found at {db_path}")
-            sys.exit(1)
-        if not os.path.exists(index_path):
-            print(f"Error: Index for '{ds_name}' not found at {index_path}")
-            sys.exit(1)
-
     # Check output doesn't collide with sources
     if args.output in args.datasets:
         print(f"Error: Output dataset '{args.output}' cannot be one of the source datasets")
         sys.exit(1)
 
-    target_db = Database(output_db_path)
-    target_index = VectorIndex(output_index_path)
+    output_db_path, output_index_path = _get_dataset_paths(args.output)
 
+    datasets_with_db = [ds for ds in args.datasets if _dataset_has_db(ds)]
+
+    # Copy DB records + embeddings for datasets that have them
     total_copied = 0
     total_skipped = 0
 
+    if datasets_with_db:
+        target_db = Database(output_db_path)
+        target_index = VectorIndex(output_index_path)
+
+        for ds_name in datasets_with_db:
+            db_path, index_path = _get_dataset_paths(ds_name)
+            source_db = Database(db_path)
+            source_index = VectorIndex(index_path)
+
+            detections = _fetch_detections(source_db)
+
+            print(f"Copying {len(detections)} detections from '{ds_name}'...")
+            copied, skipped = _copy_detections(detections, source_index, target_db, target_index)
+            total_copied += copied
+            total_skipped += skipped
+            print(f"  Copied: {copied}, Skipped (duplicates): {skipped}")
+
+            source_db.close()
+
+        target_index.save()
+        target_db.close()
+
+        print(f"Combined {total_copied} detections into '{args.output}' ({total_skipped} duplicates skipped)")
+
+    # Copy image files
+    total_files = 0
     for ds_name in args.datasets:
-        db_path, index_path = _get_dataset_paths(ds_name)
-        source_db = Database(db_path)
-        source_index = VectorIndex(index_path)
+        files_copied = _copy_dataset_files(ds_name, args.output)
+        if files_copied:
+            print(f"Copied {files_copied} files from '{ds_name}'")
+        total_files += files_copied
 
-        # Get all detections ordered by embedding_id
-        conn = source_db._connect()
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT {source_db._SELECT_FIELDS} FROM detections ORDER BY embedding_id")
-        rows = cursor.fetchall()
-        detections = [source_db._row_to_detection(row) for row in rows]
+    if total_files:
+        print(f"Copied {total_files} image files total")
 
-        print(f"Copying {len(detections)} detections from '{ds_name}'...")
-        copied, skipped = _copy_detections(detections, source_index, target_db, target_index)
-        total_copied += copied
-        total_skipped += skipped
-        print(f"  Copied: {copied}, Skipped (duplicates): {skipped}")
+    if not datasets_with_db and total_files == 0:
+        print("Warning: No databases or image files found in source datasets")
 
-        source_db.close()
-
-    target_index.save()
-    target_db.close()
-
-    print(f"\nDone. Combined {total_copied} detections into '{args.output}' ({total_skipped} duplicates skipped)")
+    print("\nDone.")
 
 
 def split_command(args):
@@ -1101,79 +1220,86 @@ def split_command(args):
         print("Error: At least one filter required (--by-source or --by-character)")
         sys.exit(1)
 
-    source_db_path, source_index_path = _get_dataset_paths(args.source_dataset)
-    if not os.path.exists(source_db_path):
-        print(f"Error: Dataset '{args.source_dataset}' not found at {source_db_path}")
-        sys.exit(1)
-    if not os.path.exists(source_index_path):
-        print(f"Error: Index for '{args.source_dataset}' not found at {source_index_path}")
-        sys.exit(1)
-
-    source_db = Database(source_db_path)
-    source_index = VectorIndex(source_index_path)
-
-    # Build filter query
-    conditions = []
-    params = []
-    if args.by_source:
-        conditions.append("source = ?")
-        params.append(args.by_source)
-    if args.by_character:
-        char_names = [c.strip() for c in args.by_character.split(",")]
-        placeholders = ",".join("?" * len(char_names))
-        conditions.append(f"character_name IN ({placeholders})")
-        params.extend(char_names)
-
-    where_clause = " AND ".join(conditions)
-    conn = source_db._connect()
-    cursor = conn.cursor()
-    cursor.execute(
-        f"SELECT {source_db._SELECT_FIELDS} FROM detections WHERE {where_clause} ORDER BY embedding_id",
-        params,
-    )
-    rows = cursor.fetchall()
-    detections = [source_db._row_to_detection(row) for row in rows]
-
-    if not detections:
-        print("No detections match the specified filters.")
-        source_db.close()
-        sys.exit(1)
-
-    print(f"Found {len(detections)} matching detections")
-
     shards = args.shards
     if shards < 1:
         print("Error: --shards must be >= 1")
         sys.exit(1)
 
-    # Assign detections to shards
-    if shards == 1:
-        shard_map = {0: detections}
-    else:
-        shard_map = {i: [] for i in range(shards)}
-        for det in detections:
-            shard_idx = hash(det.post_id) % shards
-            shard_map[shard_idx].append(det)
+    has_db = _dataset_has_db(args.source_dataset)
 
-    for shard_idx in range(shards):
-        shard_detections = shard_map[shard_idx]
-        if shards == 1:
-            target_name = args.output
+    # Copy DB records + embeddings if DB exists
+    if has_db:
+        source_db_path, source_index_path = _get_dataset_paths(args.source_dataset)
+        source_db = Database(source_db_path)
+        source_index = VectorIndex(source_index_path)
+
+        # Build filter query
+        conditions = []
+        params = []
+        if args.by_source:
+            conditions.append("source = ?")
+            params.append(args.by_source)
+        if args.by_character:
+            char_names = [c.strip() for c in args.by_character.split(",")]
+            placeholders = ",".join("?" * len(char_names))
+            conditions.append(f"character_name IN ({placeholders})")
+            params.extend(char_names)
+
+        detections = _fetch_detections(source_db, " AND ".join(conditions), params)
+
+        if detections:
+            print(f"Found {len(detections)} matching detections")
+
+            # Assign detections to shards
+            if shards == 1:
+                shard_map = {0: detections}
+            else:
+                shard_map = {i: [] for i in range(shards)}
+                for det in detections:
+                    shard_idx = hash(det.post_id) % shards
+                    shard_map[shard_idx].append(det)
+
+            for shard_idx in range(shards):
+                shard_detections = shard_map[shard_idx]
+                target_name = _shard_name(args.output, shard_idx, shards)
+
+                target_db_path, target_index_path = _get_dataset_paths(target_name)
+                target_db = Database(target_db_path)
+                target_index = VectorIndex(target_index_path)
+
+                print(f"Writing {len(shard_detections)} detections to '{target_name}'...")
+                copied, skipped = _copy_detections(shard_detections, source_index, target_db, target_index)
+                print(f"  Copied: {copied}, Skipped (duplicates): {skipped}")
+
+                target_index.save()
+                target_db.close()
         else:
-            target_name = f"{args.output}_{shard_idx}"
+            print("No detections match the specified filters.")
 
-        target_db_path, target_index_path = _get_dataset_paths(target_name)
-        target_db = Database(target_db_path)
-        target_index = VectorIndex(target_index_path)
+        source_db.close()
 
-        print(f"Writing {len(shard_detections)} detections to '{target_name}'...")
-        copied, skipped = _copy_detections(shard_detections, source_index, target_db, target_index)
-        print(f"  Copied: {copied}, Skipped (duplicates): {skipped}")
+    # Copy image files
+    total_files = 0
+    for shard_idx in range(shards):
+        target_name = _shard_name(args.output, shard_idx, shards)
+        files_copied = _copy_dataset_files(
+            args.source_dataset,
+            target_name,
+            by_source=args.by_source,
+            by_character=args.by_character,
+            shard_idx=shard_idx if shards > 1 else None,
+            shards=shards,
+        )
+        if files_copied:
+            print(f"Copied {files_copied} files to '{target_name}'")
+        total_files += files_copied
 
-        target_index.save()
-        target_db.close()
+    if total_files:
+        print(f"Copied {total_files} image files total")
 
-    source_db.close()
+    if not has_db and total_files == 0:
+        print("Warning: No database or image files found for source dataset")
+
     print("\nDone.")
 
 
