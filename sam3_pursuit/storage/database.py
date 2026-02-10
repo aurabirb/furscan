@@ -249,6 +249,13 @@ class Database:
         return [self._row_to_detection(row) for row in rows]
 
     @retry_on_locked()
+    def get_all_character_names(self) -> list[str]:
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT character_name FROM detections WHERE character_name IS NOT NULL ORDER BY character_name")
+        return [row[0] for row in c.fetchall()]
+
+    @retry_on_locked()
     def get_stats(self) -> dict:
         conn = self._connect()
         c = conn.cursor()

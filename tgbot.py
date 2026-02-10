@@ -263,29 +263,50 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-MAX_EXAMPLES = 10
-
-
-async def examples(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /examples command - show example images of a character."""
+async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /show and /search commands - show example images of a character."""
     if not context.args:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Usage: /examples CharacterName"
+            text="Usage: /show CharacterName"
         )
         return
 
-    character_name = " ".join(context.args)
+    query = " ".join(context.args)
     try:
         ingestor = get_ingestor()
-        detections = ingestor.db.get_detections_by_character(character_name)
+        all_names = ingestor.db.get_all_character_names()
 
-        if not detections:
+        # Try exact match first (case-insensitive)
+        name_lower = {n.lower(): n for n in all_names}
+        matched_names = []
+        if query.lower() in name_lower:
+            matched_names = [name_lower[query.lower()]]
+        else:
+            # Fuzzy match using difflib
+            from difflib import get_close_matches
+            # Match against lowercased names, map back to originals
+            close = get_close_matches(query.lower(), name_lower.keys(), n=5, cutoff=0.5)
+            matched_names = [name_lower[c] for c in close]
+
+        if not matched_names:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=f"No detections found for '{character_name}'."
+                text=f"No characters found matching '{query}'."
             )
             return
+
+        # Gather detections from all matched names
+        detections = []
+        for name in matched_names:
+            detections.extend(ingestor.db.get_detections_by_character(name))
+
+        if len(matched_names) > 1:
+            names_list = ", ".join(matched_names)
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"Matched characters: {names_list}"
+            )
 
         # Collect unique image URLs (one per post)
         seen_posts = set()
@@ -298,17 +319,18 @@ async def examples(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
             seen_posts.add(det.post_id)
             page_url = get_source_url(det.source, det.post_id)
-            caption = f"{character_name} ({det.source})"
+            caption = f"{det.character_name} ({det.source})"
             if page_url:
-                caption = f"<a href=\"{page_url}\">{character_name}</a> ({det.source})"
+                caption = f"<a href=\"{page_url}\">{det.character_name}</a> ({det.source})"
             media.append(InputMediaPhoto(media=url, caption=caption, parse_mode="HTML"))
-            if len(media) >= MAX_EXAMPLES:
+            if len(media) >= Config.MAX_EXAMPLES:
                 break
 
         if not media:
+            names_list = ", ".join(matched_names)
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=f"No linkable images found for '{character_name}' (only manual/tgbot sources)."
+                text=f"No linkable images found for {names_list} (only manual/tgbot sources)."
             )
             return
 
@@ -320,7 +342,7 @@ async def examples(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     except Exception as e:
-        print(f"Error in examples: {e}", file=sys.stderr)
+        print(f"Error in show: {e}", file=sys.stderr)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=f"Error: {e}"
@@ -388,7 +410,8 @@ def build_application(token: str):
     app.add_handler(MessageHandler((~filters.COMMAND) & filters.TEXT & filters.REPLY, reply_to_photo))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("examples", examples))
+    app.add_handler(CommandHandler("show", show))
+    app.add_handler(CommandHandler("search", show))
     app.add_handler(CommandHandler("whodis", whodis))
     app.add_handler(CommandHandler("furspy", whodis))
     app.add_handler(CommandHandler("aitool", aitool.handle_aitool))

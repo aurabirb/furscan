@@ -55,6 +55,7 @@ class Config:
     SAM3_IMAGE_SIZE = 644
 
     # Search
+    MAX_EXAMPLES = 10
     DEFAULT_TOP_K = 5
     DEFAULT_MIN_CONFIDENCE = 0.6  # 60% minimum confidence for displaying results
     HNSW_M = 32
