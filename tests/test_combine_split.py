@@ -130,6 +130,30 @@ class TestCopyDetections:
         source_db.close()
         target_db.close()
 
+    def test_multiple_characters_same_post(self, tmp_path):
+        """Test that multiple characters from the same post are all copied."""
+        source_db, source_index, _ = _make_dataset(tmp_path, "src_multi", [
+            ("post1", "CharA", "furtrack", "solid_128"),
+            ("post1", "CharB", "furtrack", "solid_128"),
+        ])
+
+        target_db = Database(str(tmp_path / "tgt_multi.db"))
+        target_index = VectorIndex(str(tmp_path / "tgt_multi.index"))
+
+        detections = _get_all_detections(source_db)
+        copied, skipped = _copy_detections(detections, source_index, target_db, target_index)
+
+        assert copied == 2
+        assert skipped == 0
+
+        target_dets = _get_all_detections(target_db)
+        assert len(target_dets) == 2
+        assert {d.character_name for d in target_dets} == {"CharA", "CharB"}
+
+        target_index.save()
+        source_db.close()
+        target_db.close()
+
     def test_dedup(self, tmp_path):
         """Test that duplicates are skipped."""
         source_db, source_index, _ = _make_dataset(tmp_path, "src2", [

@@ -1086,11 +1086,13 @@ def _copy_detections(detections, source_index, target_db, target_index, batch_si
     import numpy as np
     from sam3_pursuit.storage.database import Detection
 
-    # Build set of existing (post_id, preprocessing_info, source) in target for dedup
+    # Build set of existing keys in target for dedup
+    # Include all fields that distinguish unique detections: same post can have
+    # multiple characters, and same character can have multiple segments (bboxes)
     conn = target_db._connect()
     cursor = conn.cursor()
-    cursor.execute("SELECT post_id, preprocessing_info, source FROM detections")
-    existing = {(r[0], r[1], r[2]) for r in cursor.fetchall()}
+    cursor.execute("SELECT post_id, preprocessing_info, source, character_name, segmentor_model, bbox_x, bbox_y, bbox_width, bbox_height FROM detections")
+    existing = {row for row in cursor.fetchall()}
 
     next_emb_id = target_db.get_next_embedding_id()
     copied = 0
@@ -1100,7 +1102,8 @@ def _copy_detections(detections, source_index, target_db, target_index, batch_si
     batch_embeddings = []
 
     for det in detections:
-        key = (det.post_id, det.preprocessing_info, det.source)
+        key = (det.post_id, det.preprocessing_info, det.source, det.character_name,
+               det.segmentor_model, det.bbox_x, det.bbox_y, det.bbox_width, det.bbox_height)
         if key in existing:
             skipped += 1
             continue
