@@ -129,6 +129,17 @@ Examples:
     barq_parser.add_argument("--exclude-datasets", "-e", help="Skip post_ids in these datasets (comma-separated)")
     _add_classify_args(barq_parser, default=True)
 
+    combine_parser = subparsers.add_parser("combine", help="Combine multiple datasets into one")
+    combine_parser.add_argument("datasets", nargs="+", help="Source dataset names")
+    combine_parser.add_argument("--output", "-o", required=True, help="Target dataset name")
+
+    split_parser = subparsers.add_parser("split", help="Split a dataset by criteria")
+    split_parser.add_argument("source_dataset", help="Source dataset name")
+    split_parser.add_argument("--output", "-o", required=True, help="Target dataset name")
+    split_parser.add_argument("--by-source", help="Filter by ingestion source")
+    split_parser.add_argument("--by-character", help="Filter by character name(s), comma-separated")
+    split_parser.add_argument("--shards", type=int, default=1, help="Number of shards to split into (default: 1)")
+
     evaluate_parser = subparsers.add_parser("evaluate", help="Evaluate one dataset against another")
     evaluate_parser.add_argument("--from", dest="from_dataset", default="validation",
                                   help="Dataset to evaluate (default: validation)")
@@ -164,6 +175,10 @@ Examples:
         download_command(args)
     elif args.command == "evaluate":
         evaluate_command(args)
+    elif args.command == "combine":
+        combine_command(args)
+    elif args.command == "split":
+        split_command(args)
 
 
 def _add_classify_args(parser, default=None):
@@ -947,6 +962,219 @@ def evaluate_command(args):
         for bucket in results["confidence_calibration"]:
             if bucket["count"] > 0:
                 print(f"  {bucket['range']}: {bucket['accuracy']:.1%} accurate (n={bucket['count']})")
+
+
+def _copy_detections(detections, source_index, target_db, target_index, batch_size=500):
+    """Copy detections and their embeddings from source dataset to target dataset.
+
+    Returns (copied, skipped) counts.
+    """
+    import numpy as np
+    from sam3_pursuit.storage.database import Detection
+
+    # Build set of existing (post_id, preprocessing_info, source) in target for dedup
+    conn = target_db._connect()
+    cursor = conn.cursor()
+    cursor.execute("SELECT post_id, preprocessing_info, source FROM detections")
+    existing = {(r[0], r[1], r[2]) for r in cursor.fetchall()}
+
+    next_emb_id = target_db.get_next_embedding_id()
+    copied = 0
+    skipped = 0
+
+    batch_detections = []
+    batch_embeddings = []
+
+    for det in detections:
+        key = (det.post_id, det.preprocessing_info, det.source)
+        if key in existing:
+            skipped += 1
+            continue
+
+        # Reconstruct embedding from source index
+        if det.embedding_id >= source_index.size:
+            skipped += 1
+            continue
+        embedding = np.zeros(Config.EMBEDDING_DIM, dtype=np.float32)
+        source_index.index.reconstruct(det.embedding_id, embedding)
+
+        # Remap embedding_id
+        new_det = Detection(
+            id=None,
+            post_id=det.post_id,
+            character_name=det.character_name,
+            embedding_id=next_emb_id,
+            bbox_x=det.bbox_x,
+            bbox_y=det.bbox_y,
+            bbox_width=det.bbox_width,
+            bbox_height=det.bbox_height,
+            confidence=det.confidence,
+            segmentor_model=det.segmentor_model,
+            source=det.source,
+            uploaded_by=det.uploaded_by,
+            source_filename=det.source_filename,
+            preprocessing_info=det.preprocessing_info,
+            git_version=det.git_version,
+        )
+
+        batch_detections.append(new_det)
+        batch_embeddings.append(embedding)
+        existing.add(key)
+        next_emb_id += 1
+
+        if len(batch_detections) >= batch_size:
+            target_index.add(np.array(batch_embeddings, dtype=np.float32))
+            target_db.add_detections_batch(batch_detections)
+            copied += len(batch_detections)
+            batch_detections = []
+            batch_embeddings = []
+
+    # Flush remaining
+    if batch_detections:
+        target_index.add(np.array(batch_embeddings, dtype=np.float32))
+        target_db.add_detections_batch(batch_detections)
+        copied += len(batch_detections)
+
+    return copied, skipped
+
+
+def combine_command(args):
+    """Combine multiple datasets into one."""
+    from sam3_pursuit.storage.database import Database
+    from sam3_pursuit.storage.vector_index import VectorIndex
+
+    output_db_path, output_index_path = _get_dataset_paths(args.output)
+
+    # Verify source datasets exist
+    for ds_name in args.datasets:
+        db_path, index_path = _get_dataset_paths(ds_name)
+        if not os.path.exists(db_path):
+            print(f"Error: Dataset '{ds_name}' not found at {db_path}")
+            sys.exit(1)
+        if not os.path.exists(index_path):
+            print(f"Error: Index for '{ds_name}' not found at {index_path}")
+            sys.exit(1)
+
+    # Check output doesn't collide with sources
+    if args.output in args.datasets:
+        print(f"Error: Output dataset '{args.output}' cannot be one of the source datasets")
+        sys.exit(1)
+
+    target_db = Database(output_db_path)
+    target_index = VectorIndex(output_index_path)
+
+    total_copied = 0
+    total_skipped = 0
+
+    for ds_name in args.datasets:
+        db_path, index_path = _get_dataset_paths(ds_name)
+        source_db = Database(db_path)
+        source_index = VectorIndex(index_path)
+
+        # Get all detections ordered by embedding_id
+        conn = source_db._connect()
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT {source_db._SELECT_FIELDS} FROM detections ORDER BY embedding_id")
+        rows = cursor.fetchall()
+        detections = [source_db._row_to_detection(row) for row in rows]
+
+        print(f"Copying {len(detections)} detections from '{ds_name}'...")
+        copied, skipped = _copy_detections(detections, source_index, target_db, target_index)
+        total_copied += copied
+        total_skipped += skipped
+        print(f"  Copied: {copied}, Skipped (duplicates): {skipped}")
+
+        source_db.close()
+
+    target_index.save()
+    target_db.close()
+
+    print(f"\nDone. Combined {total_copied} detections into '{args.output}' ({total_skipped} duplicates skipped)")
+
+
+def split_command(args):
+    """Split a dataset by criteria."""
+    from sam3_pursuit.storage.database import Database
+    from sam3_pursuit.storage.vector_index import VectorIndex
+
+    if not args.by_source and not args.by_character:
+        print("Error: At least one filter required (--by-source or --by-character)")
+        sys.exit(1)
+
+    source_db_path, source_index_path = _get_dataset_paths(args.source_dataset)
+    if not os.path.exists(source_db_path):
+        print(f"Error: Dataset '{args.source_dataset}' not found at {source_db_path}")
+        sys.exit(1)
+    if not os.path.exists(source_index_path):
+        print(f"Error: Index for '{args.source_dataset}' not found at {source_index_path}")
+        sys.exit(1)
+
+    source_db = Database(source_db_path)
+    source_index = VectorIndex(source_index_path)
+
+    # Build filter query
+    conditions = []
+    params = []
+    if args.by_source:
+        conditions.append("source = ?")
+        params.append(args.by_source)
+    if args.by_character:
+        char_names = [c.strip() for c in args.by_character.split(",")]
+        placeholders = ",".join("?" * len(char_names))
+        conditions.append(f"character_name IN ({placeholders})")
+        params.extend(char_names)
+
+    where_clause = " AND ".join(conditions)
+    conn = source_db._connect()
+    cursor = conn.cursor()
+    cursor.execute(
+        f"SELECT {source_db._SELECT_FIELDS} FROM detections WHERE {where_clause} ORDER BY embedding_id",
+        params,
+    )
+    rows = cursor.fetchall()
+    detections = [source_db._row_to_detection(row) for row in rows]
+
+    if not detections:
+        print("No detections match the specified filters.")
+        source_db.close()
+        sys.exit(1)
+
+    print(f"Found {len(detections)} matching detections")
+
+    shards = args.shards
+    if shards < 1:
+        print("Error: --shards must be >= 1")
+        sys.exit(1)
+
+    # Assign detections to shards
+    if shards == 1:
+        shard_map = {0: detections}
+    else:
+        shard_map = {i: [] for i in range(shards)}
+        for det in detections:
+            shard_idx = hash(det.post_id) % shards
+            shard_map[shard_idx].append(det)
+
+    for shard_idx in range(shards):
+        shard_detections = shard_map[shard_idx]
+        if shards == 1:
+            target_name = args.output
+        else:
+            target_name = f"{args.output}_{shard_idx}"
+
+        target_db_path, target_index_path = _get_dataset_paths(target_name)
+        target_db = Database(target_db_path)
+        target_index = VectorIndex(target_index_path)
+
+        print(f"Writing {len(shard_detections)} detections to '{target_name}'...")
+        copied, skipped = _copy_detections(shard_detections, source_index, target_db, target_index)
+        print(f"  Copied: {copied}, Skipped (duplicates): {skipped}")
+
+        target_index.save()
+        target_db.close()
+
+    source_db.close()
+    print("\nDone.")
 
 
 if __name__ == "__main__":

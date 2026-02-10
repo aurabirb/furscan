@@ -192,6 +192,40 @@ pursuit download furtrack --all -e pursuit
 pursuit download barq -e pursuit,validation
 ```
 
+### Combine datasets
+
+Merge multiple datasets into a single target dataset (non-destructive, source datasets unchanged):
+
+```bash
+# Combine two datasets into one
+pursuit combine pursuit validation --output merged
+
+# Combine three datasets
+pursuit combine pursuit validation test --output all_data
+```
+
+Duplicates (same `post_id` + `preprocessing_info` + `source`) are automatically skipped.
+
+### Split a dataset
+
+Extract a subset of a dataset by criteria (non-destructive, source dataset unchanged):
+
+```bash
+# Extract only furtrack entries
+pursuit split pursuit --output furtrack_only --by-source furtrack
+
+# Extract specific characters
+pursuit split pursuit --output subset --by-character "CharA,CharB"
+
+# Split into shards (creates barq_split_0, barq_split_1)
+pursuit split pursuit --output barq_split --by-source barq --shards 2
+
+# Combine filters
+pursuit split pursuit --output ft_chars --by-source furtrack --by-character "CharA"
+```
+
+At least one filter (`--by-source` or `--by-character`) is required. Sharding uses `hash(post_id) % shards` for deterministic assignment.
+
 ### Run Telegram bot
 
 ```bash
@@ -207,12 +241,12 @@ python tgbot.py
 ## Python API
 
 ```python
-from sam3_pursuit import FursuitIdentifier
+from sam3_pursuit import FursuitIngestor
 from sam3_pursuit.models.preprocessor import IsolationConfig
 from PIL import Image
 
 # Initialize with default settings (loads SAM3 + DINOv2)
-identifier = FursuitIdentifier()
+ingestor = FursuitIngestor()
 
 # Or customize background isolation
 isolation_config = IsolationConfig(
@@ -220,11 +254,11 @@ isolation_config = IsolationConfig(
     background_color=(128, 128, 128),  # Gray background
     blur_radius=25                   # For blur mode
 )
-identifier = FursuitIdentifier(isolation_config=isolation_config)
+ingestor = FursuitIngestor(isolation_config=isolation_config)
 
 # Identify character in image
 image = Image.open("photo.jpg")
-results = identifier.identify(image, top_k=5)
+results = ingestor.identify(image, top_k=5)
 
 for segment in results:
     print(f"Segment {segment.segment_index} at {segment.segment_bbox}:")
@@ -232,10 +266,10 @@ for segment in results:
         print(f"  {match.character_name}: {match.confidence:.1%}")
 
 # Add images for characters
-identifier.add_images(["MyCharacter", "Zygote"], ["img1.jpg", "img2.jpg"])
+ingestor.add_images(["MyCharacter", "Zygote"], ["img1.jpg", "img2.jpg"])
 
 # Get statistics
-stats = identifier.get_stats()
+stats = ingestor.get_stats()
 print(f"Database contains {stats['unique_characters']} characters")
 ```
 
@@ -348,7 +382,7 @@ pursuit/
 ├── sam3_pursuit/           # Main package
 │   ├── api/
 │   │   ├── cli.py          # Command-line interface
-│   │   └── identifier.py   # Main API: FursuitIdentifier
+│   │   └── identifier.py   # Main API: FursuitIngestor
 │   ├── models/
 │   │   ├── segmentor.py    # SAM3 segmentation (SAM3FursuitSegmentor, FullImageSegmentor)
 │   │   ├── embedder.py     # DINOv2 embeddings (FursuitEmbedder)
@@ -480,7 +514,7 @@ Automatic device selection: CUDA → MPS → CPU
 
 Force specific device:
 ```python
-identifier = FursuitIdentifier(device="cuda")  # or "cpu", "mps"
+ingestor = FursuitIngestor(device="cuda")  # or "cpu", "mps"
 ```
 
 ## References
