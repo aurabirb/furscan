@@ -171,6 +171,8 @@ Examples:
     ingest_parser.add_argument("--shards", type=int, nargs="?", const=0, default=None,
                                help="Ingest shards in parallel (from split --shards). "
                                     "Omit value to auto-discover, or specify count.")
+    ingest_parser.add_argument("--workers", "-w", type=int, default=None,
+                               help="Max shards to process in parallel (default: all at once)")
     _add_classify_args(ingest_parser)
 
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
@@ -681,7 +683,7 @@ def _discover_shards(dataset: str) -> list[str]:
 
 
 def _strip_shards_from_argv() -> list[str]:
-    """Return sys.argv with --shards [N] removed."""
+    """Return sys.argv with --shards [N] and --workers/-w N removed."""
     argv = sys.argv[:]
     i = 0
     while i < len(argv):
@@ -689,6 +691,11 @@ def _strip_shards_from_argv() -> list[str]:
             argv.pop(i)
             # Pop the optional numeric argument if present
             if i < len(argv) and argv[i].isdigit():
+                argv.pop(i)
+        elif argv[i] in ("--workers", "-w"):
+            argv.pop(i)
+            # Pop the value argument
+            if i < len(argv) and argv[i].lstrip("-").isdigit():
                 argv.pop(i)
         else:
             i += 1
@@ -708,6 +715,21 @@ def _set_dataset_in_argv(argv: list[str], shard_name: str) -> list[str]:
     return argv
 
 
+def _wait_for_one(active):
+    """Wait until at least one process in active list finishes.
+    Returns (remaining_active, failed_names)."""
+    import time
+    failed = []
+    while True:
+        for i, (name, p) in enumerate(active):
+            if p.poll() is not None:
+                if p.returncode != 0:
+                    failed.append(name)
+                remaining = active[:i] + active[i + 1:]
+                return remaining, failed
+        time.sleep(0.5)
+
+
 def _ingest_shards(args):
     """Run ingest in parallel across shard datasets."""
     import subprocess
@@ -723,19 +745,32 @@ def _ingest_shards(args):
         shard_names = [f"{args.dataset}_{i}" for i in range(shard_count)]
 
     base_argv = _strip_shards_from_argv()
+    max_workers = args.workers
 
-    print(f"Ingesting {len(shard_names)} shards in parallel: {', '.join(shard_names)}")
+    if max_workers is not None and max_workers < 1:
+        print("Error: --workers must be >= 1")
+        sys.exit(1)
 
-    processes = []
+    parallel = max_workers if max_workers else len(shard_names)
+    label = f"(max {parallel} at a time)" if max_workers else "(all at once)"
+    print(f"Ingesting {len(shard_names)} shards {label}: {', '.join(shard_names)}")
+
+    failed = []
+    active = []  # list of (shard_name, Popen)
+
     for shard_name in shard_names:
+        # Wait for a slot if at capacity
+        while len(active) >= parallel:
+            active, batch_failed = _wait_for_one(active)
+            failed.extend(batch_failed)
+
         cmd = [sys.executable, "-m", "sam3_pursuit.api.cli"] + _set_dataset_in_argv(base_argv, shard_name)[1:]
         print(f"  Starting: {shard_name} ({' '.join(cmd)})")
         p = subprocess.Popen(cmd)
-        processes.append((shard_name, p))
+        active.append((shard_name, p))
 
-    # Wait for all to finish
-    failed = []
-    for shard_name, p in processes:
+    # Wait for remaining
+    for shard_name, p in active:
         p.wait()
         if p.returncode != 0:
             failed.append(shard_name)
