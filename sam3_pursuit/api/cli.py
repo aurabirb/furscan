@@ -699,7 +699,12 @@ def _make_shard_ingestor(shared_ingestor, shard_name: str):
 
 
 def _ingest_shards(args):
-    """Ingest shards concurrently, sharing one loaded model across threads."""
+    """Ingest shards concurrently with shared GPU model.
+
+    Uses threads to overlap I/O (image loading, DB writes, mask I/O) with
+    GPU work (segmentation, embedding). The GIL is released during PyTorch
+    CUDA ops and file I/O, so threads can run concurrently for those.
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     shard_count = args.shards
@@ -711,10 +716,10 @@ def _ingest_shards(args):
     else:
         shard_names = [f"{args.dataset}_{i}" for i in range(shard_count)]
 
-    workers = min(getattr(args, "workers", 2), len(shard_names))
+    workers = min(getattr(args, "workers", 4), len(shard_names))
     print(f"Ingesting {len(shard_names)} shards with {workers} workers: {', '.join(shard_names)}")
 
-    # Load models once
+    # Load GPU models once
     shared_ingestor = _get_ingestor(args)
 
     def _run_shard(shard_idx: int, shard_name: str):
