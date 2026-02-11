@@ -19,10 +19,12 @@ import sqlite3
 import aiohttp
 import requests
 
+from sam3_pursuit.config import Config
+
 # Configuration
 MAX_IMAGES_PER_CHAR = 2
 CACHE_DB = "furtrack_cache.db"
-IMAGES_DIR = "furtrack_images"
+IMAGES_DIR = f"datasets/{Config.DEFAULT_DATASET}/furtrack"
 EXCLUDED_POST_IDS: set[str] = set()  # Set by CLI for --exclude-datasets
 MAX_CONCURRENT_DOWNLOADS = 20
 BACKUP_INTERVAL = 1000  # Backup database every N characters

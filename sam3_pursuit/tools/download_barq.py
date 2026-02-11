@@ -19,9 +19,11 @@ from pathlib import Path
 import aiohttp
 from dotenv import load_dotenv
 
+from sam3_pursuit.config import Config
+
 load_dotenv()
 
-IMAGES_DIR = "barq_images"
+IMAGES_DIR = f"datasets/{Config.DEFAULT_DATASET}/barq"
 CACHE_DB = "barq_cache.db"
 EXCLUDED_POST_IDS: set[str] = set()  # Set by CLI for --exclude-datasets
 MAX_CONCURRENT_DOWNLOADS = 5

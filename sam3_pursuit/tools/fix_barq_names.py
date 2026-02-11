@@ -2,7 +2,7 @@
 """Fix Barq placeholder names ("Liked Only") in folders and database.
 
 Resolves placeholder names using profile data from barq_cache.db,
-then renames folders in barq_images/ and updates records in pursuit.db
+then renames folders in the barq images directory and updates records in the database
 (matched by post_id / image UUID).
 
 Usage:
@@ -17,10 +17,12 @@ import shutil
 import sqlite3
 from pathlib import Path
 
+from sam3_pursuit.config import Config
+
 _PLACEHOLDER_NAMES = {"likes only", "liked only", "private", "mutuals only"}
 
-IMAGES_DIR = "barq_images"
-DEFAULT_DATASET = "pursuit"
+IMAGES_DIR = f"datasets/{Config.DEFAULT_DATASET}/barq"
+DEFAULT_DATASET = Config.DEFAULT_DATASET
 
 
 def _is_placeholder_name(name: str) -> bool:

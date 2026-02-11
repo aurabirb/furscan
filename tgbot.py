@@ -74,8 +74,9 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await identify_photo(update, context)
 
 async def download_tg_file(new_file):
-    os.makedirs("tg_download", exist_ok=True)
-    temp_path = Path("tg_download") / f"{new_file.file_id}.jpg"
+    tg_dir = f"datasets/{Config.DEFAULT_DATASET}/tg_download"
+    os.makedirs(tg_dir, exist_ok=True)
+    temp_path = Path(tg_dir) / f"{new_file.file_id}.jpg"
     print(f"Downloading into {temp_path}")
     with open(temp_path, 'wb') as f:
         bs = await new_file.download_as_bytearray()

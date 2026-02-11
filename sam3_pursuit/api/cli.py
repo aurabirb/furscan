@@ -25,34 +25,18 @@ def _get_dataset_paths(dataset: str) -> tuple[str, str]:
 
 
 def _get_dataset_dir(dataset: str) -> Path:
-    """Get the root image directory for a dataset.
-
-    Non-default datasets: datasets/{dataset}/
-    Default dataset: project root (sources are {source}_images/ dirs)
-    """
-    if dataset == Config.DEFAULT_DATASET:
-        return Path(Config.BASE_DIR)
+    """Get the root image directory for a dataset: datasets/{dataset}/"""
     return Path(Config.BASE_DIR) / "datasets" / dataset
 
 
 def _get_source_subdirs(dataset_dir: Path, dataset: str) -> list[tuple[str, Path]]:
-    """Get (source_name, path) pairs for all source subdirs in a dataset dir.
-
-    Non-default: datasets/{dataset}/{source}/ -> source = dir name
-    Default: {source}_images/ at project root -> source = name without _images
-    """
+    """Get (source_name, path) pairs for all source subdirs in a dataset dir."""
     if not dataset_dir.is_dir():
         return []
     results = []
-    if dataset == Config.DEFAULT_DATASET:
-        for d in sorted(dataset_dir.iterdir()):
-            if d.is_dir() and d.name.endswith("_images"):
-                source_name = d.name.removesuffix("_images")
-                results.append((source_name, d))
-    else:
-        for d in sorted(dataset_dir.iterdir()):
-            if d.is_dir():
-                results.append((d.name, d))
+    for d in sorted(dataset_dir.iterdir()):
+        if d.is_dir():
+            results.append((d.name, d))
     return results
 
 
@@ -85,11 +69,7 @@ def _copy_dataset_files(
     copied = 0
 
     for source_name, source_path in source_subdirs:
-        # Determine target source subdir name
-        if target_dataset == Config.DEFAULT_DATASET:
-            tgt_source_dir = tgt_dir / f"{source_name}_images"
-        else:
-            tgt_source_dir = tgt_dir / source_name
+        tgt_source_dir = tgt_dir / source_name
 
         for char_dir in sorted(source_path.iterdir()):
             if not char_dir.is_dir():
@@ -213,8 +193,9 @@ Examples:
                                   help="Download all characters")
     furtrack_parser.add_argument("--max-images", "-m", type=int, default=2,
                                   help="Max images per character (default: 2)")
-    furtrack_parser.add_argument("--output-dir", "-o", default="furtrack_images",
-                                  help="Output directory (default: furtrack_images)")
+    _default_ft_dir = f"datasets/{Config.DEFAULT_DATASET}/furtrack"
+    furtrack_parser.add_argument("--output-dir", "-o", default=_default_ft_dir,
+                                  help=f"Output directory (default: {_default_ft_dir})")
     furtrack_parser.add_argument("--exclude-datasets", "-e", help="Skip post_ids in these datasets (comma-separated)")
 
     barq_parser = download_subparsers.add_parser("barq", help="Download from Barq (requires BARQ_BEARER_TOKEN)")
@@ -223,7 +204,8 @@ Examples:
     barq_parser.add_argument("--max-pages", type=int, default=100, help="Max pages to fetch")
     barq_parser.add_argument("--all-images", action="store_true", help="Download all images per profile")
     barq_parser.add_argument("--max-age", type=float, help="Skip profiles cached within N days")
-    barq_parser.add_argument("--output-dir", "-o", default="barq_images", help="Output directory (default: barq_images)")
+    _default_barq_dir = f"datasets/{Config.DEFAULT_DATASET}/barq"
+    barq_parser.add_argument("--output-dir", "-o", default=_default_barq_dir, help=f"Output directory (default: {_default_barq_dir})")
     barq_parser.add_argument("--clean", action="store_true", help="Delete existing images below threshold (no download)")
     barq_parser.add_argument("--exclude-datasets", "-e", help="Skip post_ids in these datasets (comma-separated)")
     _add_classify_args(barq_parser, default=True)
@@ -1007,7 +989,8 @@ def download_command(args):
 
     # When downloading to a non-default dataset, auto-configure paths
     if args.dataset != Config.DEFAULT_DATASET:
-        if not args.output_dir or (args.output_dir in ("furtrack_images", "barq_images",)):
+        _dd = Config.DEFAULT_DATASET
+        if not args.output_dir or (args.output_dir in (f"datasets/{_dd}/furtrack", f"datasets/{_dd}/barq",)):
             args.output_dir = f"datasets/{args.dataset}/{args.source}"
 
     excluded_post_ids = _get_excluded_post_ids(getattr(args, "exclude_datasets", ""))

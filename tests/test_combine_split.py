@@ -33,8 +33,6 @@ def tmp_dir(tmp_path):
         )
 
     def _patched_get_dataset_dir(dataset):
-        if dataset == Config.DEFAULT_DATASET:
-            return tmp_path
         return tmp_path / "datasets" / dataset
 
     cli_mod._get_dataset_paths = _patched_get_dataset_paths
@@ -482,10 +480,7 @@ def _make_image_files(base_dir, source_name, characters, is_default=False):
     characters: dict of {char_name: [post_id, ...]}
     Returns list of created file paths.
     """
-    if is_default:
-        source_dir = base_dir / f"{source_name}_images"
-    else:
-        source_dir = base_dir / source_name
+    source_dir = base_dir / source_name
     paths = []
     for char_name, post_ids in characters.items():
         char_dir = source_dir / char_name
@@ -572,9 +567,10 @@ class TestCopyDatasetFiles:
         assert existing.read_bytes() == b"original"
 
     def test_default_dataset_dirs(self, tmp_path, tmp_dir):
-        """Test copying from default dataset (source_images dirs at root)."""
-        _make_image_files(tmp_path, "furtrack", {"CharA": ["p1"]}, is_default=True)
-        _make_image_files(tmp_path, "barq", {"CharB": ["p2"]}, is_default=True)
+        """Test copying from default dataset."""
+        default_dir = tmp_path / "datasets" / Config.DEFAULT_DATASET
+        _make_image_files(default_dir, "furtrack", {"CharA": ["p1"]})
+        _make_image_files(default_dir, "barq", {"CharB": ["p2"]})
 
         copied = _copy_dataset_files(Config.DEFAULT_DATASET, "ds_from_default")
         assert copied == 2
@@ -584,13 +580,13 @@ class TestCopyDatasetFiles:
         assert (out_dir / "barq" / "CharB" / "p2.jpg").exists()
 
     def test_copy_to_default_dataset(self, tmp_path, tmp_dir):
-        """Test copying into default dataset (creates source_images dirs)."""
+        """Test copying into default dataset."""
         src_dir = tmp_path / "datasets" / "ds_f"
         _make_image_files(src_dir, "furtrack", {"CharA": ["p1"]})
 
         copied = _copy_dataset_files("ds_f", Config.DEFAULT_DATASET)
         assert copied == 1
-        assert (tmp_path / "furtrack_images" / "CharA" / "p1.jpg").exists()
+        assert (tmp_path / "datasets" / Config.DEFAULT_DATASET / "furtrack" / "CharA" / "p1.jpg").exists()
 
     def test_empty_source(self, tmp_path, tmp_dir):
         """Test copying from nonexistent source dir."""

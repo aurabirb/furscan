@@ -368,7 +368,7 @@ pursuit ingest directory --data-dir ./characters/ --source manual
 
 ```bash
 pursuit download furtrack --all --max-images 5
-pursuit ingest directory --data-dir ./furtrack_images/ -s furtrack
+pursuit ingest directory --data-dir ./datasets/pursuit/furtrack/ -s furtrack
 ```
 
 ### Option 4: Index NFC25 database

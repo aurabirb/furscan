@@ -408,7 +408,7 @@ class TestBarqIngestion(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create barq-style directory structure: {profile_id}.{name}/{image_uuid}.jpg
-            data_dir = os.path.join(tmpdir, "barq_images")
+            data_dir = os.path.join(tmpdir, "barq")
             os.makedirs(data_dir)
 
             # Create test folders with images
@@ -475,7 +475,7 @@ class TestBarqIngestion(unittest.TestCase):
         import shutil
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            data_dir = os.path.join(tmpdir, "barq_images")
+            data_dir = os.path.join(tmpdir, "barq")
             os.makedirs(data_dir)
 
             # Create a folder without the dot separator (should be skipped)
