@@ -364,6 +364,7 @@ def _get_ingestor(args):
     from sam3_pursuit.api.identifier import FursuitIngestor
     isolation_config = _get_isolation_config(args)
     segmentor_model_name = Config.SAM3_MODEL if getattr(args, "segment", True) else None
+    device = getattr(args, "device")
     segmentor_concept = args.concept if hasattr(args, "concept") and args.concept else Config.DEFAULT_CONCEPT
     _auto_detect_embedder(args)
     print(f"Using embedder: {getattr(args, 'embedder', Config.DEFAULT_EMBEDDER)}")
@@ -371,6 +372,7 @@ def _get_ingestor(args):
     preprocessors = _build_preprocessors(args)
 
     return FursuitIngestor(
+        device=device,
         db_path=args.db,
         index_path=args.index,
         isolation_config=isolation_config,
