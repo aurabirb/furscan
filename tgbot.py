@@ -192,11 +192,11 @@ async def identify_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def whodis(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /whodis and /furspy commands - identify a photo being replied to."""
+    """Handle /whodis and /furscan commands - identify a photo being replied to."""
     if not update.message or not update.message.reply_to_message:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Reply to a photo with /whodis or /furspy to identify it."
+            text="Reply to a photo with /whodis or /furscan to identify it."
         )
         return
 
@@ -259,7 +259,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=update.effective_chat.id,
         text="Send me a photo to identify fursuit characters.\n\n"
              "To add: send photo with caption character:Name\n"
-             "To identify in groups: reply to a photo with /whodis or /furspy"
+             "To identify in groups: reply to a photo with /whodis or /furscan\n"
+             "To search by description: /search blue fox with white markings\n"
+             "To show a character: /show CharacterName"
     )
 
 
@@ -349,6 +351,88 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /search command - text-based fursuit search using CLIP/SigLIP embeddings."""
+    if not context.args:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Usage: /search blue fox with white markings"
+        )
+        return
+
+    query = " ".join(context.args)
+    try:
+        ingestor = get_ingestor()
+        results = ingestor.search_text(query, top_k=10)
+
+        if not results:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"No matches found for '{query}'."
+            )
+            return
+
+        # Deduplicate by character, keeping best match
+        seen = {}
+        for r in results:
+            name = r.character_name or "unknown"
+            if name not in seen or r.confidence > seen[name].confidence:
+                seen[name] = r
+        top_matches = sorted(seen.values(), key=lambda x: x.confidence, reverse=True)[:5]
+
+        lines = [f"Search results for '<b>{query}</b>':"]
+        for i, m in enumerate(top_matches, 1):
+            name = m.character_name or "Unknown"
+            url = get_source_url(m.source, m.post_id)
+            if url:
+                lines.append(f"  {i}. <a href=\"{url}\">{name}</a> ({m.confidence*100:.1f}%)")
+            else:
+                lines.append(f"  {i}. {name} ({m.confidence*100:.1f}%)")
+
+        # Send example images for the top match
+        top_name = top_matches[0].character_name
+        detections = ingestor.db.get_detections_by_character(top_name)
+        seen_posts = set()
+        media = []
+        for det in detections:
+            if det.post_id in seen_posts:
+                continue
+            img_url = get_source_image_url(det.source, det.post_id)
+            if not img_url:
+                continue
+            seen_posts.add(det.post_id)
+            page_url = get_source_url(det.source, det.post_id)
+            caption = f"{det.character_name} ({det.source})"
+            if page_url:
+                caption = f"<a href=\"{page_url}\">{det.character_name}</a> ({det.source})"
+            media.append(InputMediaPhoto(media=img_url, caption=caption, parse_mode="HTML"))
+            if len(media) >= Config.MAX_EXAMPLES:
+                break
+
+        msg = "\n".join(lines)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, text=msg, parse_mode="HTML",
+            disable_web_page_preview=True)
+
+        if media:
+            for i in range(0, len(media), 10):
+                await context.bot.send_media_group(
+                    chat_id=update.effective_chat.id, media=media[i:i+10])
+
+    except ValueError as e:
+        # search_text raises ValueError if embedder doesn't support text
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Text search not available: {e}"
+        )
+    except Exception as e:
+        print(f"Error in search: {e}", file=sys.stderr)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Error: {e}"
+        )
+
+
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command."""
     try:
@@ -411,9 +495,9 @@ def build_application(token: str):
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("show", show))
-    app.add_handler(CommandHandler("search", show))
+    app.add_handler(CommandHandler("search", search))
     app.add_handler(CommandHandler("whodis", whodis))
-    app.add_handler(CommandHandler("furspy", whodis))
+    app.add_handler(CommandHandler("furscan", whodis))
     app.add_handler(CommandHandler("aitool", aitool.handle_aitool))
     app.add_handler(CommandHandler("restart", restart))
     app.add_handler(CommandHandler("commit", aitool.handle_commit))
