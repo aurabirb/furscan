@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=user
+User=ubuntu
 WorkingDirectory=/home/ubuntu/furscan/
 ExecStart=/home/ubuntu/furscan/.venv/bin/python tgbot.py
 Restart=on-failure
