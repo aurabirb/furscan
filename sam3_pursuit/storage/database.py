@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import subprocess
 import time
@@ -169,6 +170,29 @@ class Database:
             )
         """)
         conn.commit()
+
+    @staticmethod
+    def read_metadata_lightweight(db_path: str, key: str) -> Optional[str]:
+        """Read a metadata value without full Database initialization.
+
+        Useful when you need to check metadata (e.g. embedder) before deciding
+        whether to open the full Database. Returns None if DB/table/key doesn't exist.
+        """
+        if not os.path.exists(db_path):
+            return None
+        try:
+            conn = sqlite3.connect(db_path, timeout=5)
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='metadata'")
+            if not cursor.fetchone():
+                conn.close()
+                return None
+            cursor = conn.execute("SELECT value FROM metadata WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            conn.close()
+            return row[0] if row else None
+        except Exception:
+            return None
 
     @retry_on_locked()
     def get_metadata(self, key: str) -> Optional[str]:

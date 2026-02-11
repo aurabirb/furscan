@@ -50,6 +50,13 @@ class CLIPEmbedder:
             features = projected / projected.norm(dim=-1, keepdim=True)
         return features.cpu().numpy().flatten()
 
+    def embed_text(self, text: str) -> np.ndarray:
+        inputs = self.processor(text=[text], return_tensors="pt", padding=True).to(self.device)
+        with torch.no_grad():
+            features = self.model.get_text_features(**inputs)
+            features = features / features.norm(dim=-1, keepdim=True)
+        return features.cpu().numpy().flatten().astype(np.float32)
+
 class SigLIPEmbedder:
     def __init__(self, device: Optional[str] = None, model_name: str = Config.SIGLIP_MODEL):
         self.device = device or Config.get_device()
@@ -66,6 +73,15 @@ class SigLIPEmbedder:
             embedding = outputs.pooler_output
             embedding = embedding / embedding.norm(dim=-1, keepdim=True)
         return embedding.cpu().numpy().flatten()
+
+    def embed_text(self, text: str) -> np.ndarray:
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        inputs = tokenizer([text], return_tensors="pt", padding=True).to(self.device)
+        with torch.no_grad():
+            features = self.model.get_text_features(**inputs)
+            features = features / features.norm(dim=-1, keepdim=True)
+        return features.cpu().numpy().flatten().astype(np.float32)
 
 
 class ColorHistogramEmbedder:

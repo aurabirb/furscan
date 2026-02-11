@@ -338,6 +338,20 @@ class FursuitIngestor:
         basename = os.path.basename(img_path)
         return os.path.splitext(basename)[0]
 
+    def search_text(self, text: str, top_k: int = Config.DEFAULT_TOP_K) -> list[IdentificationResult]:
+        """Search for characters by text description. Requires CLIP or SigLIP embedder."""
+        embedder = self.pipeline.embedder
+        if not hasattr(embedder, "embed_text"):
+            raise ValueError(
+                f"Text search requires a CLIP or SigLIP embedder. "
+                f"This dataset uses {self.pipeline.get_embedder_short_name()}."
+            )
+        if self.index.size == 0:
+            print("Warning: Index is empty, no matches possible")
+            return []
+        embedding = embedder.embed_text(text)
+        return self._search_embedding(embedding, top_k)
+
     def get_stats(self) -> dict:
         db_stats = self.db.get_stats()
         db_stats["index_size"] = self.index.size

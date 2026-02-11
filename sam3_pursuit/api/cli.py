@@ -239,6 +239,13 @@ Examples:
     split_parser.add_argument("--by-character", help="Filter by character name(s), comma-separated")
     split_parser.add_argument("--shards", type=int, default=1, help="Number of shards to split into (default: 1)")
 
+    search_parser = subparsers.add_parser("search", help="Search for characters by text description (CLIP/SigLIP only)")
+    search_parser.add_argument("query", help="Text description of the fursuit to search for")
+    search_parser.add_argument("--top-k", "-k", type=int, default=5, help="Number of results")
+    search_parser.add_argument("--min-confidence", "-m", type=float, default=Config.DEFAULT_MIN_CONFIDENCE,
+                               help="Minimum confidence threshold")
+    search_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
     evaluate_parser = subparsers.add_parser("evaluate", help="Evaluate one dataset against another")
     evaluate_parser.add_argument("--from", dest="from_dataset", default="validation",
                                   help="Dataset to evaluate (default: validation)")
@@ -272,6 +279,8 @@ Examples:
         classify_command(args)
     elif args.command == "download":
         download_command(args)
+    elif args.command == "search":
+        search_command(args)
     elif args.command == "evaluate":
         evaluate_command(args)
     elif args.command == "combine":
@@ -341,34 +350,24 @@ def _build_preprocessors(args):
 def _auto_detect_embedder(args):
     """If user didn't explicitly pass --embedder, check DB metadata for stored embedder.
 
-    Uses lightweight sqlite3 to avoid double Database() init.
+    Uses Database.read_metadata_lightweight to avoid double Database() init.
     """
+    from sam3_pursuit.storage.database import Database
+
     embedder_name = getattr(args, "embedder", Config.DEFAULT_EMBEDDER)
     if embedder_name != Config.DEFAULT_EMBEDDER:
         return  # User explicitly chose an embedder
 
     db_path = getattr(args, "db", None)
-    if not db_path or not os.path.exists(db_path):
+    if not db_path:
         return
 
-    # Read metadata directly with sqlite3 to avoid double Database() init
-    try:
-        import sqlite3
-        conn = sqlite3.connect(db_path, timeout=5)
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='metadata'")
-        if cursor.fetchone():
-            cursor = conn.execute("SELECT value FROM metadata WHERE key = ?",
-                                  (Config.METADATA_KEY_EMBEDDER,))
-            row = cursor.fetchone()
-            if row and row[0] != DEFAULT_EMBEDDER_SHORT:
-                cli_name = SHORT_NAME_TO_CLI.get(row[0])
-                if cli_name:
-                    print(f"Auto-detected embedder from dataset: {cli_name} ({row[0]})")
-                    args.embedder = cli_name
-        conn.close()
-    except Exception:
-        pass
+    stored = Database.read_metadata_lightweight(db_path, Config.METADATA_KEY_EMBEDDER)
+    if stored and stored != DEFAULT_EMBEDDER_SHORT:
+        cli_name = SHORT_NAME_TO_CLI.get(stored)
+        if cli_name:
+            print(f"Auto-detected embedder from dataset: {cli_name} ({stored})")
+            args.embedder = cli_name
 
 
 def _get_ingestor(args):
@@ -470,6 +469,93 @@ def identify_command(args):
                 url = get_source_url(match.source, match.post_id)
                 if url:
                     print(f"     URL: {url}")
+
+
+def search_command(args):
+    """Handle search command - text-based search (lightweight, no SAM3 needed)."""
+    from sam3_pursuit.storage.database import Database
+
+    _auto_detect_embedder(args)
+    embedder = _build_embedder(args)
+
+    # Check embedder supports text search
+    if embedder is None:
+        # Default embedder (DINOv2) - no text support
+        stored = Database.read_metadata_lightweight(args.db, Config.METADATA_KEY_EMBEDDER)
+        embedder_name = stored or DEFAULT_EMBEDDER_SHORT
+        cli_name = SHORT_NAME_TO_CLI.get(embedder_name, embedder_name)
+        print(f"Error: Text search requires a CLIP or SigLIP embedder. This dataset uses {cli_name}.")
+        sys.exit(1)
+
+    if not hasattr(embedder, "embed_text"):
+        print(f"Error: Text search requires a CLIP or SigLIP embedder. The '{args.embedder}' embedder does not support text search.")
+        sys.exit(1)
+
+    if not _dataset_has_db(args.dataset):
+        print(f"Error: Dataset '{args.dataset}' not found.")
+        sys.exit(1)
+
+    db, index = _open_dataset(args.dataset)
+
+    if index.size == 0:
+        print("Error: Index is empty, no matches possible.")
+        sys.exit(1)
+
+    # Embed text query and search
+    embedding = embedder.embed_text(args.query)
+    top_k = args.top_k
+    min_confidence = args.min_confidence
+
+    distances, indices = index.search(embedding, top_k * 3)
+
+    # Collect results, deduplicate by character (best match per character)
+    seen_characters = {}
+    for distance, idx in zip(distances[0], indices[0]):
+        if idx == -1:
+            continue
+        detection = db.get_detection_by_embedding_id(int(idx))
+        if detection is None:
+            continue
+        confidence = max(0.0, 1.0 - distance / 2.0)
+        if confidence < min_confidence:
+            continue
+        char_name = detection.character_name or "unknown"
+        if char_name not in seen_characters or confidence > seen_characters[char_name]["confidence"]:
+            seen_characters[char_name] = {
+                "character_name": char_name,
+                "confidence": confidence,
+                "distance": float(distance),
+                "post_id": detection.post_id,
+                "source": detection.source,
+                "num_matches": seen_characters.get(char_name, {}).get("num_matches", 0) + 1,
+            }
+        else:
+            seen_characters[char_name]["num_matches"] = seen_characters[char_name].get("num_matches", 0) + 1
+
+    results = sorted(seen_characters.values(), key=lambda x: x["confidence"], reverse=True)[:top_k]
+
+    if args.json:
+        print(json.dumps({"query": args.query, "results": results}, indent=2))
+    else:
+        if not results:
+            print(f"No matches found for: \"{args.query}\"")
+            return
+
+        print(f"\nSearch results for: \"{args.query}\"")
+        print("=" * 60)
+        for i, r in enumerate(results, 1):
+            print(f"  {i}. {r['character_name']}")
+            print(f"     Confidence: {r['confidence']:.2%}")
+            print(f"     Distance: {r['distance']:.4f}")
+            print(f"     Best match post: {r['post_id']}")
+            if r["source"]:
+                url = get_source_url(r["source"], r["post_id"])
+                if url:
+                    print(f"     URL: {url}")
+            if r["num_matches"] > 1:
+                print(f"     ({r['num_matches']} matching embeddings)")
+
+    db.close()
 
 
 def add_command(args):

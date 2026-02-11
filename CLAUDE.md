@@ -93,6 +93,15 @@ pursuit add -c "CharacterName" -s manual img1.jpg img2.jpg img3.jpg
 pursuit add -c "CharacterName" -s furtrack img1.jpg img2.jpg --save-crops
 ```
 
+### Search by text description (CLIP/SigLIP only)
+
+```bash
+pursuit -ds my_clip_dataset search "blue fox with white markings"
+pursuit -ds my_clip_dataset search "red wolf" --top-k 10 --json
+```
+
+Note: Text search requires a dataset built with a CLIP or SigLIP embedder. DINOv2 datasets do not support text search.
+
 ### Test segmentation on an image
 
 ```bash
@@ -267,6 +276,11 @@ for segment in results:
 
 # Add images for characters
 ingestor.add_images(["MyCharacter", "Zygote"], ["img1.jpg", "img2.jpg"])
+
+# Search by text (CLIP/SigLIP embedder only)
+results = ingestor.search_text("blue fox with white markings", top_k=5)
+for match in results:
+    print(f"  {match.character_name}: {match.confidence:.1%}")
 
 # Get statistics
 stats = ingestor.get_stats()
