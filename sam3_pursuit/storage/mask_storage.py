@@ -131,4 +131,9 @@ class MaskStorage:
         path = self.get_mask_dir(source, model, concept) / f"{name}.png"
         if not path.exists():
             return None
-        return np.array(Image.open(path).convert("L"))
+        try:
+            return np.array(Image.open(path).convert("L"))
+        except Exception:
+            print(f"WARN: corrupt mask {path}, deleting")
+            path.unlink(missing_ok=True)
+            return None
