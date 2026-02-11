@@ -170,8 +170,6 @@ Examples:
     ingest_parser.add_argument("--shards", type=int, nargs="?", const=0, default=None,
                                help="Ingest shards in parallel (from split --shards). "
                                     "Omit value to auto-discover, or specify count.")
-    ingest_parser.add_argument("--workers", "-w", type=int, default=4,
-                               help="Concurrent shard workers (default: 4, requires --shards)")
     _add_classify_args(ingest_parser)
 
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
@@ -678,37 +676,41 @@ def _discover_shards(dataset: str) -> list[str]:
     return sorted(found, key=lambda x: int(pattern.match(x).group(1)))  # type: ignore[union-attr]
 
 
+def _strip_shards_from_argv() -> list[str]:
+    """Return sys.argv with --shards [N] removed."""
+    argv = sys.argv[:]
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--shards":
+            argv.pop(i)
+            # Pop the optional numeric argument if present
+            if i < len(argv) and argv[i].isdigit():
+                argv.pop(i)
+        else:
+            i += 1
+    return argv
 
-def _make_shard_ingestor(shared_ingestor, shard_name: str):
-    """Create a lightweight ingestor for a shard, sharing the GPU pipeline."""
-    from sam3_pursuit.api.identifier import FursuitIngestor
-    from sam3_pursuit.storage.database import Database
-    from sam3_pursuit.storage.vector_index import VectorIndex
 
-    db_path, index_path = _get_dataset_paths(shard_name)
-    embedding_dim = shared_ingestor.pipeline.embedder.embedding_dim
-
-    ingestor = object.__new__(FursuitIngestor)
-    ingestor.db = Database(db_path)
-    ingestor.index = VectorIndex(index_path, embedding_dim=embedding_dim)
-    ingestor.pipeline = shared_ingestor.pipeline
-    ingestor.fallback_pipeline = shared_ingestor.fallback_pipeline
-    ingestor._validate_or_store_embedder()
-    ingestor._sync_index_and_db()
-    return ingestor
+def _set_dataset_in_argv(argv: list[str], shard_name: str) -> list[str]:
+    """Replace or insert --dataset in argv."""
+    argv = argv[:]
+    for i, arg in enumerate(argv):
+        if arg in ("--dataset", "-d", "-ds") and i + 1 < len(argv):
+            argv[i + 1] = shard_name
+            return argv
+    # Not found, insert after program name
+    argv.insert(1, "--dataset")
+    argv.insert(2, shard_name)
+    return argv
 
 
 def _ingest_shards(args):
-    """Ingest shards concurrently with shared GPU model.
-
-    Uses threads to overlap I/O (image loading, DB writes, mask I/O) with
-    GPU work (segmentation, embedding). The GIL is released during PyTorch
-    CUDA ops and file I/O, so threads can run concurrently for those.
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    """Run ingest in parallel across shard datasets."""
+    import subprocess
 
     shard_count = args.shards
     if shard_count == 0:
+        # Auto-discover
         shard_names = _discover_shards(args.dataset)
         if not shard_names:
             print(f"Error: No shards found matching '{args.dataset}_*'")
@@ -716,48 +718,23 @@ def _ingest_shards(args):
     else:
         shard_names = [f"{args.dataset}_{i}" for i in range(shard_count)]
 
-    workers = min(getattr(args, "workers", 4), len(shard_names))
-    print(f"Ingesting {len(shard_names)} shards with {workers} workers: {', '.join(shard_names)}")
+    base_argv = _strip_shards_from_argv()
 
-    # Load GPU models once
-    shared_ingestor = _get_ingestor(args)
+    print(f"Ingesting {len(shard_names)} shards in parallel: {', '.join(shard_names)}")
 
-    def _run_shard(shard_idx: int, shard_name: str):
-        print(f"\n[{shard_name}] Starting shard {shard_idx+1}/{len(shard_names)}")
-        ingestor = _make_shard_ingestor(shared_ingestor, shard_name)
+    processes = []
+    for shard_name in shard_names:
+        cmd = [sys.executable, "-m", "sam3_pursuit.api.cli"] + _set_dataset_in_argv(base_argv, shard_name)[1:]
+        print(f"  Starting: {shard_name} ({' '.join(cmd)})")
+        p = subprocess.Popen(cmd)
+        processes.append((shard_name, p))
 
-        data_dir = args.data_dir or (f"datasets/{shard_name}/{args.source}" if args.source else None)
-        if not data_dir:
-            print(f"[{shard_name}] Error: Cannot determine data-dir")
-            return
-
-        try:
-            if args.method == "directory":
-                _ingest_directory_with(ingestor, data_dir, args)
-            elif args.method == "nfc25":
-                _ingest_nfc25_with(ingestor, data_dir, args)
-            elif args.method == "barq":
-                _ingest_barq_with(ingestor, data_dir, args)
-        finally:
-            ingestor.db.close()
-
-        print(f"[{shard_name}] Done")
-
+    # Wait for all to finish
     failed = []
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(_run_shard, i, name): name
-            for i, name in enumerate(shard_names)
-        }
-        for future in as_completed(futures):
-            name = futures[future]
-            try:
-                future.result()
-            except Exception as e:
-                print(f"[{name}] Failed: {e}")
-                failed.append(name)
-
-    shared_ingestor.db.close()
+    for shard_name, p in processes:
+        p.wait()
+        if p.returncode != 0:
+            failed.append(shard_name)
 
     if failed:
         print(f"\nError: {len(failed)} shard(s) failed: {', '.join(failed)}")
@@ -791,14 +768,17 @@ def ingest_command(args):
         ingest_from_barq(args)
 
 
-def _ingest_directory_with(ingestor, data_dir_str: str, args):
-    """Ingest images from directory structure using a pre-loaded ingestor."""
-    data_dir = Path(data_dir_str)
+def ingest_from_directory(args):
+    """Ingest images from directory structure: data_dir/character_name/*.jpg"""
+
+    ingestor = _get_ingestor(args)
+    data_dir = Path(args.data_dir)
 
     if not data_dir.exists():
         print(f"Error: Data directory not found: {data_dir}")
         sys.exit(1)
 
+    # Determine source for provenance
     if args.source not in SOURCES_AVAILABLE:
         print(f"Error: Invalid source '{args.source}'. Must be one of: {', '.join(SOURCES_AVAILABLE)}")
         sys.exit(1)
@@ -834,15 +814,11 @@ def _ingest_directory_with(ingestor, data_dir_str: str, args):
     print(f"\nTotal: Added {added} images")
 
 
-def ingest_from_directory(args):
-    """Ingest images from directory structure: data_dir/character_name/*.jpg"""
+def ingest_from_nfc25(args):
+    """Ingest images from NFC25 dataset."""
     ingestor = _get_ingestor(args)
-    _ingest_directory_with(ingestor, args.data_dir, args)
 
-
-def _ingest_nfc25_with(ingestor, data_dir_str: str, args):
-    """Ingest NFC25 dataset using a pre-loaded ingestor."""
-    data_dir = Path(data_dir_str)
+    data_dir = Path(args.data_dir)
     json_path = data_dir / "nfc25-fursuit-list.json"
     images_dir = data_dir / "fursuit_images"
 
@@ -859,13 +835,15 @@ def _ingest_nfc25_with(ingestor, data_dir_str: str, args):
 
     print(f"Found {len(fursuit_list)} fursuits in NFC25 dataset")
 
+    total_added = 0
+
     char_names = []
     img_paths = []
     for fursuit in fursuit_list:
         char_names.append(fursuit.get("NickName", ""))
         img_filename = str(fursuit.get("ImageUrl")).split("/")[-1]
         img_paths.append(str(images_dir / img_filename))
-        if args.limit and len(char_names) >= args.limit:
+        if args.limit and total_added >= args.limit:
             break
 
     add_full_image = getattr(args, "add_full_image", True)
@@ -878,51 +856,58 @@ def _ingest_nfc25_with(ingestor, data_dir_str: str, args):
         skip_non_fursuit=args.skip_non_fursuit,
         classify_threshold=args.threshold,
     )
+    total_added += added
 
-    print(f"\nTotal: Added {added} images")
-
-
-def ingest_from_nfc25(args):
-    """Ingest images from NFC25 dataset."""
-    ingestor = _get_ingestor(args)
-    _ingest_nfc25_with(ingestor, args.data_dir, args)
+    print(f"\nTotal: Added {total_added} images")
 
 
-def _ingest_barq_with(ingestor, data_dir_str: str, args):
-    """Ingest Barq images using a pre-loaded ingestor."""
+def ingest_from_barq(args):
+    """Ingest images from Barq download directory.
+
+    Folder structure: {profile_id}.{character_name}/{image_uuid}.jpg
+    Image UUIDs are used as post_ids (extracted from filename automatically).
+    Profile metadata can be looked up from barq_cache.db if needed.
+    """
     from sam3_pursuit.storage.database import SOURCE_BARQ
 
-    data_dir = Path(data_dir_str)
+    ingestor = _get_ingestor(args)
+    data_dir = Path(args.data_dir)
 
     if not data_dir.exists():
         print(f"Error: Data directory not found: {data_dir}")
         sys.exit(1)
 
+    # Names that are placeholders from Barq's API (not real character names)
     placeholder_names = {"likes only", "liked only", "private", "mutuals only"}
 
     def _resolve_barq_name(profile_id: str, fallback: str) -> str:
+        """Try to resolve a better name from barq cache for placeholder names."""
         try:
             from sam3_pursuit.tools.download_barq import get_cached_profile, get_folder_name
             cached = get_cached_profile(profile_id)
             if cached:
+                # Re-resolve using updated logic
                 resolved = get_folder_name(cached).split(".", 1)[1]
                 if resolved.lower().strip() not in placeholder_names:
                     return resolved
         except Exception:
             pass
-        return profile_id
+        return profile_id  # Fall back to profile ID
 
     def get_images():
+        # Iterate directories matching pattern: {profile_id}.{name}
         for char_dir in sorted(data_dir.iterdir()):
             if not char_dir.is_dir():
                 continue
 
             dir_name = char_dir.name
+            # Parse profile_id.character_name format
             if "." not in dir_name:
                 continue
 
             character_name = dir_name.split(".", 1)[1]
 
+            # Handle placeholder names from Barq API
             if character_name.lower().strip() in placeholder_names:
                 profile_id = dir_name.split(".", 1)[0]
                 old_name = character_name
@@ -953,12 +938,6 @@ def _ingest_barq_with(ingestor, data_dir_str: str, args):
     )
 
     print(f"\nTotal: Added {added} images from Barq")
-
-
-def ingest_from_barq(args):
-    """Ingest images from Barq download directory."""
-    ingestor = _get_ingestor(args)
-    _ingest_barq_with(ingestor, args.data_dir, args)
 
 
 def stats_command(args):
