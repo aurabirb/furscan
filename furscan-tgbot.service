@@ -5,11 +5,11 @@ After=network.target
 [Service]
 Type=simple
 User=user
-WorkingDirectory=/opt/furscan/
-ExecStart=/opt/furscan/.venv/bin/python tgbot.py
+WorkingDirectory=/home/ubuntu/furscan/
+ExecStart=/home/ubuntu/furscan/.venv/bin/python tgbot.py
 Restart=on-failure
 RestartSec=5
-EnvironmentFile=/opt/furscan/.env
+EnvironmentFile=/home/ubuntu/furscan/.env
 
 [Install]
 WantedBy=multi-user.target
