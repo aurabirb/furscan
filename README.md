@@ -1,5 +1,5 @@
 # Pursuit - Fursuit Character Recognition
-Available on Telegram as [@furspybot](https://t.me/furspybot) and other names.
+Available on Telegram as [@furscanbot](https://t.me/furscanbot) and other names.
 
 ## Read [CLAUDE.md](CLAUDE.md) for a description of this project
 
