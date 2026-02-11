@@ -170,8 +170,8 @@ Examples:
     ingest_parser.add_argument("--shards", type=int, nargs="?", const=0, default=None,
                                help="Ingest shards in parallel (from split --shards). "
                                     "Omit value to auto-discover, or specify count.")
-    ingest_parser.add_argument("--workers", "-w", type=int, default=2,
-                               help="Concurrent shard workers (default: 2, requires --shards)")
+    ingest_parser.add_argument("--workers", "-w", type=int, default=4,
+                               help="Concurrent shard workers (default: 4, requires --shards)")
     _add_classify_args(ingest_parser)
 
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
