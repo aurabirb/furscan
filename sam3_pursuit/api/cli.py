@@ -170,6 +170,8 @@ Examples:
     ingest_parser.add_argument("--shards", type=int, nargs="?", const=0, default=None,
                                help="Ingest shards in parallel (from split --shards). "
                                     "Omit value to auto-discover, or specify count.")
+    ingest_parser.add_argument("--workers", "-w", type=int, default=2,
+                               help="Concurrent shard workers (default: 2, requires --shards)")
     _add_classify_args(ingest_parser)
 
     stats_parser = subparsers.add_parser("stats", help="Show system statistics")
@@ -677,10 +679,28 @@ def _discover_shards(dataset: str) -> list[str]:
 
 
 
-def _ingest_shards(args):
-    """Ingest each shard sequentially, reusing a single loaded model."""
+def _make_shard_ingestor(shared_ingestor, shard_name: str):
+    """Create a lightweight ingestor for a shard, sharing the GPU pipeline."""
+    from sam3_pursuit.api.identifier import FursuitIngestor
     from sam3_pursuit.storage.database import Database
     from sam3_pursuit.storage.vector_index import VectorIndex
+
+    db_path, index_path = _get_dataset_paths(shard_name)
+    embedding_dim = shared_ingestor.pipeline.embedder.embedding_dim
+
+    ingestor = object.__new__(FursuitIngestor)
+    ingestor.db = Database(db_path)
+    ingestor.index = VectorIndex(index_path, embedding_dim=embedding_dim)
+    ingestor.pipeline = shared_ingestor.pipeline
+    ingestor.fallback_pipeline = shared_ingestor.fallback_pipeline
+    ingestor._validate_or_store_embedder()
+    ingestor._sync_index_and_db()
+    return ingestor
+
+
+def _ingest_shards(args):
+    """Ingest shards concurrently, sharing one loaded model across threads."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     shard_count = args.shards
     if shard_count == 0:
@@ -691,39 +711,53 @@ def _ingest_shards(args):
     else:
         shard_names = [f"{args.dataset}_{i}" for i in range(shard_count)]
 
-    print(f"Ingesting {len(shard_names)} shards: {', '.join(shard_names)}")
+    workers = min(getattr(args, "workers", 2), len(shard_names))
+    print(f"Ingesting {len(shard_names)} shards with {workers} workers: {', '.join(shard_names)}")
 
     # Load models once
-    ingestor = _get_ingestor(args)
+    shared_ingestor = _get_ingestor(args)
 
-    for i, shard_name in enumerate(shard_names):
-        print(f"\n{'='*60}")
-        print(f"Shard {i+1}/{len(shard_names)}: {shard_name}")
-        print(f"{'='*60}")
+    def _run_shard(shard_idx: int, shard_name: str):
+        print(f"\n[{shard_name}] Starting shard {shard_idx+1}/{len(shard_names)}")
+        ingestor = _make_shard_ingestor(shared_ingestor, shard_name)
 
-        # Swap DB and index to point at this shard
-        db_path, index_path = _get_dataset_paths(shard_name)
-        ingestor.db.close()
-        ingestor.db = Database(db_path)
-        embedding_dim = ingestor.pipeline.embedder.embedding_dim
-        ingestor.index = VectorIndex(index_path, embedding_dim=embedding_dim)
-        ingestor._validate_or_store_embedder()
-        ingestor._sync_index_and_db()
-
-        # Derive data-dir for this shard
         data_dir = args.data_dir or (f"datasets/{shard_name}/{args.source}" if args.source else None)
         if not data_dir:
-            print(f"Error: Cannot determine data-dir for shard '{shard_name}'")
-            continue
+            print(f"[{shard_name}] Error: Cannot determine data-dir")
+            return
 
-        if args.method == "directory":
-            _ingest_directory_with(ingestor, data_dir, args)
-        elif args.method == "nfc25":
-            _ingest_nfc25_with(ingestor, data_dir, args)
-        elif args.method == "barq":
-            _ingest_barq_with(ingestor, data_dir, args)
+        try:
+            if args.method == "directory":
+                _ingest_directory_with(ingestor, data_dir, args)
+            elif args.method == "nfc25":
+                _ingest_nfc25_with(ingestor, data_dir, args)
+            elif args.method == "barq":
+                _ingest_barq_with(ingestor, data_dir, args)
+        finally:
+            ingestor.db.close()
 
-    ingestor.db.close()
+        print(f"[{shard_name}] Done")
+
+    failed = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_run_shard, i, name): name
+            for i, name in enumerate(shard_names)
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                print(f"[{name}] Failed: {e}")
+                failed.append(name)
+
+    shared_ingestor.db.close()
+
+    if failed:
+        print(f"\nError: {len(failed)} shard(s) failed: {', '.join(failed)}")
+        sys.exit(1)
+
     print(f"\nAll {len(shard_names)} shards ingested successfully.")
 
 
