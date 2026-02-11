@@ -725,17 +725,14 @@ def _ingest_shards(args):
     processes = []
     for shard_name in shard_names:
         cmd = [sys.executable, "-m", "sam3_pursuit.api.cli"] + _set_dataset_in_argv(base_argv, shard_name)[1:]
-        print(f"  Starting: {shard_name}")
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        print(f"  Starting: {shard_name} ({' '.join(cmd)})")
+        p = subprocess.Popen(cmd)
         processes.append((shard_name, p))
 
-    # Collect output and wait for completion
+    # Wait for all to finish
     failed = []
     for shard_name, p in processes:
-        stdout, _ = p.communicate()
-        if stdout:
-            for line in stdout.rstrip().split("\n"):
-                print(f"  [{shard_name}] {line}")
+        p.wait()
         if p.returncode != 0:
             failed.append(shard_name)
 
