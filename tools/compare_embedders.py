@@ -48,6 +48,52 @@ from sam3_pursuit.storage.database import Database
 from sam3_pursuit.storage.vector_index import VectorIndex
 
 
+def load_aliases(alias_path: str | None = None) -> dict[str, dict[str, str]]:
+    """Load character alias mapping from CSV.
+
+    Returns {canonical_name_lower: {dataset_name: alias_in_that_dataset}}.
+    The CSV has columns: pursuit, barq, dino, furtrack, validation, ...
+    The 'pursuit' column is the canonical name.
+    """
+    if alias_path is None:
+        alias_path = str(Path(__file__).resolve().parent.parent / "tests" / "character_aliases.csv")
+    p = Path(alias_path)
+    if not p.exists():
+        return {}
+
+    aliases: dict[str, dict[str, str]] = {}
+    with open(p, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            canonical = row.get("pursuit", "").strip()
+            if not canonical:
+                continue
+            ds_map = {}
+            for col, val in row.items():
+                if col == "pursuit" or not val.strip():
+                    continue
+                ds_map[col] = val.strip()
+            # Also include the canonical name itself under "pursuit"
+            ds_map["pursuit"] = canonical
+            aliases[canonical.lower()] = ds_map
+    return aliases
+
+
+def resolve_gt_for_dataset(
+    gt_name: str,
+    ds_name: str,
+    aliases: dict[str, dict[str, str]],
+) -> str | None:
+    """Resolve a ground truth character name to its alias in a specific dataset.
+
+    Returns the dataset-specific name, or the original name if no alias found.
+    """
+    entry = aliases.get(gt_name.lower())
+    if entry and ds_name in entry:
+        return entry[ds_name]
+    return gt_name
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Compare embedder performance across datasets")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -60,6 +106,8 @@ def parse_args():
                         help="Output file path")
     parser.add_argument("--datasets", type=str, help="Comma-separated list of dataset names to compare (default: all)")
     parser.add_argument("--device", type=str, help="Device override (cuda, cpu, mps)")
+    parser.add_argument("--aliases", type=str, default="tests/character_aliases.csv",
+                        help="Character alias CSV file (default: tests/character_aliases.csv)")
     return parser.parse_args()
 
 
@@ -181,6 +229,7 @@ def format_segment_results(
     segment_results: list[SegmentResults],
     ground_truth: list[str] | None,
     ds_characters: set[str] | None,
+    aliases: dict[str, dict[str, str]],
     top_k: int,
 ) -> tuple[str, list[dict], str | None]:
     """Format results for one dataset + one image.
@@ -200,20 +249,27 @@ def format_segment_results(
         return "\n".join(lines), seg_metrics, top1_char
 
     for seg in segment_results:
-        # Determine ground truth for this segment
+        # Determine ground truth for this segment, resolved to dataset-specific alias
+        seg_gt_canonical = None
         seg_gt = None
         if ground_truth and seg.segment_index < len(ground_truth):
-            seg_gt = ground_truth[seg.segment_index]
+            seg_gt_canonical = ground_truth[seg.segment_index]
+            seg_gt = resolve_gt_for_dataset(seg_gt_canonical, name, aliases)
 
         in_dataset = True
         if seg_gt and ds_characters is not None:
             in_dataset = seg_gt.lower() in ds_characters
 
+        alias_note = ""
+        if seg_gt and seg_gt_canonical and seg_gt.lower() != seg_gt_canonical.lower():
+            alias_note = f" (alias: {seg_gt})"
+
         metrics = {
             "dataset": name,
             "embedder": emb_name,
             "segment_index": seg.segment_index,
-            "ground_truth": seg_gt,
+            "ground_truth": seg_gt_canonical,
+            "ground_truth_resolved": seg_gt,
             "in_dataset": in_dataset,
             "top1_correct": False,
             "topk_correct": False,
@@ -224,11 +280,13 @@ def format_segment_results(
         }
 
         if len(segment_results) > 1:
-            gt_label = f", gt={seg_gt}" if seg_gt else ""
+            gt_label = f", gt={seg_gt_canonical}{alias_note}" if seg_gt_canonical else ""
             in_ds_label = "" if in_dataset else " [NOT IN DATASET]"
             lines.append(f"    Segment {seg.segment_index} (bbox={seg.segment_bbox}, conf={seg.segment_confidence:.2f}{gt_label}){in_ds_label}:")
-        elif seg_gt and not in_dataset:
-            lines.append(f"    [NOT IN DATASET: {seg_gt}]")
+        elif seg_gt_canonical and not in_dataset:
+            lines.append(f"    [NOT IN DATASET: {seg_gt_canonical}{alias_note}]")
+        elif alias_note:
+            lines.append(f"    [gt={seg_gt_canonical}{alias_note}]")
 
         if not seg.matches:
             lines.append("    (no matches)")
@@ -408,6 +466,12 @@ def main():
     test_images = load_test_images(args)
     print(f"\nLoaded {len(test_images)} test image(s)")
 
+    # Load character aliases
+    alias_path = Config.get_absolute_path(args.aliases) if args.aliases else None
+    aliases = load_aliases(alias_path)
+    if aliases:
+        print(f"Loaded {len(aliases)} character alias entries")
+
     datasets = get_dataset_list(args)
     ds_names = [name for name, _, _ in datasets]
     print(f"Found {len(datasets)} dataset(s): {', '.join(ds_names)}\n")
@@ -481,7 +545,7 @@ def main():
 
             text, seg_metrics, top1_char = format_segment_results(
                 name, emb_name, total_entries, segment_results,
-                ground_truth, chars, args.top_k,
+                ground_truth, chars, aliases, args.top_k,
             )
             image_results[img_idx][name] = (text, seg_metrics, top1_char)
             image_segments[img_idx][name] = segment_results
@@ -547,16 +611,24 @@ def main():
             output_lines.append(f"  Combined ({' + '.join(name for name in ds_names if name in segments_by_ds)}):")
 
             for seg in merged:
-                seg_gt = None
+                seg_gt_canonical = None
                 if ground_truth and seg.segment_index < len(ground_truth):
-                    seg_gt = ground_truth[seg.segment_index]
+                    seg_gt_canonical = ground_truth[seg.segment_index]
+
+                # For RRF combined results, check all aliases for this character
+                gt_aliases_lower = set()
+                if seg_gt_canonical:
+                    gt_aliases_lower.add(seg_gt_canonical.lower())
+                    entry = aliases.get(seg_gt_canonical.lower(), {})
+                    for alias in entry.values():
+                        gt_aliases_lower.add(alias.lower())
 
                 if len(merged) > 1:
-                    gt_label = f", gt={seg_gt}" if seg_gt else ""
+                    gt_label = f", gt={seg_gt_canonical}" if seg_gt_canonical else ""
                     output_lines.append(f"    Segment {seg.segment_index}{gt_label}:")
                 for rank, m in enumerate(seg.matches[:args.top_k], 1):
                     marker = ""
-                    if seg_gt and m.character_name and m.character_name.lower() == seg_gt.lower():
+                    if gt_aliases_lower and m.character_name and m.character_name.lower() in gt_aliases_lower:
                         marker = " <-- CORRECT"
                     output_lines.append(f"    #{rank}: {m.character_name} ({m.confidence:.1%}){marker}")
             output_lines.append("")
