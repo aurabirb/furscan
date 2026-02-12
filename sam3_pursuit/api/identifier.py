@@ -168,9 +168,16 @@ class FursuitIdentifier:
                 segmentor_model=detection.segmentor_model,
                 source=detection.source,
             ))
-        # TODO: maybe deduplicate by character name?
+        # Deduplicate by character name: keep only the best match per character
         all_results.sort(key=lambda x: x.confidence, reverse=True)
-        return all_results[:top_k]
+        seen_chars: dict[str, None] = {}
+        deduped: list[IdentificationResult] = []
+        for r in all_results:
+            key = (r.character_name or "").lower()
+            if key not in seen_chars:
+                seen_chars[key] = None
+                deduped.append(r)
+        return deduped[:top_k]
 
     def search_text(self, text: str, top_k: int = Config.DEFAULT_TOP_K) -> list[IdentificationResult]:
         """Search for characters by text description. Requires CLIP or SigLIP embedder."""
@@ -222,6 +229,69 @@ class FursuitIdentifier:
             else:
                 ret[k] = sum([stats.get(k, 0) for stats in stats_list])
         return ret
+
+
+def merge_multi_dataset_results(
+    all_results: list[list[SegmentResults]],
+    top_k: int = 5,
+) -> list[SegmentResults]:
+    """Merge results from multiple datasets using reciprocal rank fusion.
+
+    Within each dataset, matches are already deduplicated by character name
+    (done in _search_embedding). Cross-dataset merging sums 1/rank scores
+    per character, breaking ties by best raw confidence.
+
+    Returns merged SegmentResults with deduplicated, ranked matches.
+    """
+    if not all_results:
+        return []
+
+    # Use the first non-empty result set to determine segment structure
+    base = None
+    for r in all_results:
+        if r:
+            base = r
+            break
+    if base is None:
+        return []
+
+    merged = []
+    for seg_idx, base_seg in enumerate(base):
+        # Collect matches for this segment across all datasets
+        # Each dataset's matches are already deduped by character
+        per_dataset_matches: list[list[IdentificationResult]] = []
+        for dataset_results in all_results:
+            if seg_idx < len(dataset_results):
+                per_dataset_matches.append(dataset_results[seg_idx].matches)
+
+        # Reciprocal rank fusion: sum 1/rank per character across datasets
+        # Also track best raw confidence for tie-breaking
+        char_scores: dict[str, float] = {}
+        char_best_match: dict[str, IdentificationResult] = {}
+
+        for matches in per_dataset_matches:
+            for rank, m in enumerate(matches, 1):
+                key = (m.character_name or "").lower()
+                char_scores[key] = char_scores.get(key, 0.0) + 1.0 / rank
+                if key not in char_best_match or m.confidence > char_best_match[key].confidence:
+                    char_best_match[key] = m
+
+        # Sort by RRF score (descending), then by best confidence (descending)
+        ranked = sorted(
+            char_scores.keys(),
+            key=lambda k: (char_scores[k], char_best_match[k].confidence),
+            reverse=True,
+        )
+
+        merged_matches = [char_best_match[k] for k in ranked[:top_k]]
+        merged.append(SegmentResults(
+            segment_index=base_seg.segment_index,
+            segment_bbox=base_seg.segment_bbox,
+            segment_confidence=base_seg.segment_confidence,
+            matches=merged_matches,
+        ))
+
+    return merged
 
 
 def detect_embedder(db_path: str, default: str = Config.DEFAULT_EMBEDDER):

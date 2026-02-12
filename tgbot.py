@@ -27,7 +27,7 @@ import webserver
 load_dotenv()
 
 from sam3_pursuit import FursuitIdentifier, FursuitIngestor, Config
-from sam3_pursuit.api.identifier import discover_datasets
+from sam3_pursuit.api.identifier import discover_datasets, merge_multi_dataset_results
 from sam3_pursuit.api.annotator import annotate_image
 from telegram import InputMediaPhoto
 
@@ -173,13 +173,8 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
     # Run identify on all identifiers; segmentation masks are cached after the first.
     all_results = [ident.identify(image, top_k=Config.DEFAULT_TOP_K) for ident in identifiers]
 
-    # Merge results: combine matches per segment across identifiers
-    results = all_results[0] if all_results else []
-    for other in all_results[1:]:
-        for seg, other_seg in zip(results, other):
-            seg.matches.extend(other_seg.matches)
-            seg.matches.sort(key=lambda x: x.confidence, reverse=True)
-            seg.matches = seg.matches[:Config.DEFAULT_TOP_K]
+    # Merge results across datasets using reciprocal rank fusion
+    results = merge_multi_dataset_results(all_results, top_k=Config.DEFAULT_TOP_K)
 
     reply_kwargs = {"chat_id": chat_id}
     if reply_to_message_id:

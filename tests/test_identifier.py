@@ -10,6 +10,7 @@ from PIL import Image
 from sam3_pursuit.config import Config
 from sam3_pursuit.storage.database import Database, Detection
 from sam3_pursuit.storage.vector_index import VectorIndex
+from tests.conftest import skip_low_vram
 
 
 class TestDatabase(unittest.TestCase):
@@ -215,6 +216,7 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(Config.INDEX_PATH.endswith(".index"))
 
 
+@skip_low_vram
 class TestClassifier(unittest.TestCase):
     """Tests for the CLIP image classifier."""
 
@@ -255,6 +257,7 @@ class TestClassifier(unittest.TestCase):
             self.assertLessEqual(score, 1.0)
 
 
+@skip_low_vram
 class TestIdentification(unittest.TestCase):
     """Integration tests for character identification.
 
@@ -387,6 +390,7 @@ class TestIdentification(unittest.TestCase):
             )
 
 
+@skip_low_vram
 class TestBarqIngestion(unittest.TestCase):
     """Tests for Barq image ingestion."""
 
@@ -530,6 +534,7 @@ class TestBarqIngestion(unittest.TestCase):
             self.assertEqual(len(invalid_det), 0)
 
 
+@skip_low_vram
 class TestMaskReuse(unittest.TestCase):
     """Tests for mask storage and reuse functionality."""
 

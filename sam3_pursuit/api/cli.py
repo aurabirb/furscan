@@ -953,14 +953,28 @@ def ingest_from_barq(args):
 
 def stats_command(args):
     """Handle stats command."""
-    ingestor = _get_ingestor(args)
-    stats = ingestor.get_stats()
+    from sam3_pursuit.storage.database import Database
+    from sam3_pursuit.storage.vector_index import VectorIndex
+    from sam3_pursuit.api.identifier import detect_embedder
+
+    db = Database(args.db)
+    stats = db.get_stats()
+    embedder_name = detect_embedder(args.db, default="unknown")
+    # Get index size without loading embedder (just need the dimension to read)
+    # Try common dimensions; VectorIndex only needs dim to create, not to read size
+    try:
+        index = VectorIndex(args.index, embedding_dim=768)
+        stats["index_size"] = index.size
+    except Exception:
+        stats["index_size"] = "N/A"
+    stats["embedder"] = embedder_name
 
     if hasattr(args, "json") and args.json:
         print(json.dumps(stats, indent=2, default=str))
     else:
         print(f"\nPursuit Statistics ({args.dataset})")
         print("=" * 50)
+        print(f"Embedder: {embedder_name}")
         print(f"Total detections: {stats['total_detections']}")
         print(f"Unique characters: {stats['unique_characters']}")
         print(f"Unique posts: {stats['unique_posts']}")

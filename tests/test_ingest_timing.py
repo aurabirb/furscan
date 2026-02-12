@@ -16,6 +16,7 @@ from PIL import Image
 
 from sam3_pursuit.config import Config
 from sam3_pursuit.storage.mask_storage import MaskStorage
+from tests.conftest import skip_low_vram
 
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +36,7 @@ def _generate_realistic_mask(image: Image.Image, seg_index: int = 0) -> np.ndarr
 
 
 @unittest.skipIf(not os.path.exists(TEST_IMAGE), "Test image not found")
+@skip_low_vram
 class TestIngestTiming(unittest.TestCase):
     """Benchmark ingestion speed with pre-computed masks."""
 

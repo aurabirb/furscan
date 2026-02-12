@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from sam3_pursuit.config import Config
+from tests.conftest import _vram_gb
 from sam3_pursuit.storage.database import Database, Detection
 from sam3_pursuit.storage.vector_index import VectorIndex
 
@@ -162,6 +163,7 @@ class TestEmbedderMetadata:
         db.close()
 
 
+@pytest.mark.skipif(_vram_gb < 4.0, reason=f"GPU VRAM too low ({_vram_gb:.1f} GB)")
 class TestEmbedderValidationIntegration:
     """Integration tests using the real _validate_or_store_embedder logic."""
 
