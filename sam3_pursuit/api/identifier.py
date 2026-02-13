@@ -146,19 +146,83 @@ class FursuitIdentifier:
         return segment_results
 
     def _search_embedding(self, embedding: np.ndarray, top_k: int):
-        all_results: list[IdentificationResult] = []
-
         if self.total_index_size == 0:
-            return all_results
+            return []
+
+        strategy = Config.MERGE_STRATEGY
+        if strategy == "avg_embedding":
+            return self._search_avg_embedding(embedding, top_k)
+        return self._search_dedup(embedding, top_k)
+
+    def _search_dedup(self, embedding: np.ndarray, top_k: int):
+        """Simple dedup: keep best match per character."""
         distances, indices = self.index.search(embedding, top_k * 2)
-        for distance, idx in zip(distances[0], indices[0]):
+        all_results = self._faiss_to_results(distances[0], indices[0])
+        all_results.sort(key=lambda x: x.confidence, reverse=True)
+        seen: dict[str, None] = {}
+        deduped: list[IdentificationResult] = []
+        for r in all_results:
+            key = (r.character_name or "").lower()
+            if key not in seen:
+                seen[key] = None
+                deduped.append(r)
+        return deduped[:top_k]
+
+    def _search_avg_embedding(self, embedding: np.ndarray, top_k: int):
+        """Average closest embeddings per character, re-rank by distance to average."""
+        # Fetch extra results to find multiple embeddings per character
+        fetch_k = min(top_k * 6, self.total_index_size)
+        distances, indices = self.index.search(embedding, fetch_k)
+
+        # Group FAISS indices by character
+        char_indices: dict[str, list[int]] = {}
+        char_detection: dict[str, "Detection"] = {}
+        for idx in indices[0]:
+            if idx == -1:
+                continue
+            detection = self.db.get_detection_by_embedding_id(int(idx))
+            if detection is None:
+                continue
+            key = (detection.character_name or "").lower()
+            char_indices.setdefault(key, []).append(int(idx))
+            if key not in char_detection:
+                char_detection[key] = detection
+
+        if not char_indices:
+            return []
+
+        # For each character, average their embeddings and compute distance to query
+        query = embedding.reshape(1, -1).astype(np.float32)
+        results: list[IdentificationResult] = []
+        for key, faiss_ids in char_indices.items():
+            embs = np.stack([self.index.reconstruct(i) for i in faiss_ids])
+            avg_emb = embs.mean(axis=0, keepdims=True).astype(np.float32)
+            dist = float(np.sum((query - avg_emb) ** 2))
+            confidence = max(0.0, 1.0 - dist / 2.0)
+            det = char_detection[key]
+            results.append(IdentificationResult(
+                character_name=det.character_name,
+                confidence=confidence,
+                distance=dist,
+                post_id=det.post_id,
+                bbox=(det.bbox_x, det.bbox_y, det.bbox_width, det.bbox_height),
+                segmentor_model=det.segmentor_model,
+                source=det.source,
+            ))
+        results.sort(key=lambda x: x.confidence, reverse=True)
+        return results[:top_k]
+
+    def _faiss_to_results(self, distances, indices):
+        """Convert raw FAISS distances/indices to IdentificationResult list."""
+        results: list[IdentificationResult] = []
+        for distance, idx in zip(distances, indices):
             if idx == -1:
                 continue
             detection = self.db.get_detection_by_embedding_id(int(idx))
             if detection is None:
                 continue
             confidence = max(0.0, 1.0 - distance / 2.0)
-            all_results.append(IdentificationResult(
+            results.append(IdentificationResult(
                 character_name=detection.character_name,
                 confidence=confidence,
                 distance=float(distance),
@@ -168,16 +232,7 @@ class FursuitIdentifier:
                 segmentor_model=detection.segmentor_model,
                 source=detection.source,
             ))
-        # Deduplicate by character name: keep only the best match per character
-        all_results.sort(key=lambda x: x.confidence, reverse=True)
-        seen_chars: dict[str, None] = {}
-        deduped: list[IdentificationResult] = []
-        for r in all_results:
-            key = (r.character_name or "").lower()
-            if key not in seen_chars:
-                seen_chars[key] = None
-                deduped.append(r)
-        return deduped[:top_k]
+        return results
 
     def search_text(self, text: str, top_k: int = Config.DEFAULT_TOP_K) -> list[IdentificationResult]:
         """Search for characters by text description. Requires CLIP or SigLIP embedder."""
@@ -235,37 +290,58 @@ def merge_multi_dataset_results(
     all_results: list[list[SegmentResults]],
     top_k: int = 5,
 ) -> list[SegmentResults]:
-    """Merge results from multiple datasets using reciprocal rank fusion.
+    """Merge results from multiple datasets. Strategy chosen by Config.MERGE_STRATEGY."""
+    if Config.MERGE_STRATEGY == "rrf":
+        return _merge_rrf(all_results, top_k)
+    # "confidence" and "avg_embedding" both use simple best-confidence merge
+    # (avg_embedding already did the averaging inside _search_embedding)
+    return _merge_confidence(all_results, top_k)
 
-    Within each dataset, matches are already deduplicated by character name
-    (done in _search_embedding). Cross-dataset merging sums 1/rank scores
-    per character, breaking ties by best raw confidence.
 
-    Returns merged SegmentResults with deduplicated, ranked matches.
-    """
-    if not all_results:
-        return []
-
-    # Use the first non-empty result set to determine segment structure
-    base = None
-    for r in all_results:
-        if r:
-            base = r
-            break
+def _merge_confidence(
+    all_results: list[list[SegmentResults]],
+    top_k: int,
+) -> list[SegmentResults]:
+    """Merge by keeping best confidence per character across datasets."""
+    base = _get_base(all_results)
     if base is None:
         return []
 
     merged = []
     for seg_idx, base_seg in enumerate(base):
-        # Collect matches for this segment across all datasets
-        # Each dataset's matches are already deduped by character
+        char_best: dict[str, IdentificationResult] = {}
+        for dataset_results in all_results:
+            if seg_idx < len(dataset_results):
+                for m in dataset_results[seg_idx].matches:
+                    key = (m.character_name or "").lower()
+                    if key not in char_best or m.confidence > char_best[key].confidence:
+                        char_best[key] = m
+        matches = sorted(char_best.values(), key=lambda m: m.confidence, reverse=True)[:top_k]
+        merged.append(SegmentResults(
+            segment_index=base_seg.segment_index,
+            segment_bbox=base_seg.segment_bbox,
+            segment_confidence=base_seg.segment_confidence,
+            matches=matches,
+        ))
+    return merged
+
+
+def _merge_rrf(
+    all_results: list[list[SegmentResults]],
+    top_k: int,
+) -> list[SegmentResults]:
+    """Merge using reciprocal rank fusion across datasets."""
+    base = _get_base(all_results)
+    if base is None:
+        return []
+
+    merged = []
+    for seg_idx, base_seg in enumerate(base):
         per_dataset_matches: list[list[IdentificationResult]] = []
         for dataset_results in all_results:
             if seg_idx < len(dataset_results):
                 per_dataset_matches.append(dataset_results[seg_idx].matches)
 
-        # Reciprocal rank fusion: sum 1/rank per character across datasets
-        # Also track best raw confidence for tie-breaking
         char_scores: dict[str, float] = {}
         char_best_match: dict[str, IdentificationResult] = {}
 
@@ -276,14 +352,12 @@ def merge_multi_dataset_results(
                 if key not in char_best_match or m.confidence > char_best_match[key].confidence:
                     char_best_match[key] = m
 
-        # Sort by RRF score (descending), then by best confidence (descending)
         ranked = sorted(
             char_scores.keys(),
             key=lambda k: (char_scores[k], char_best_match[k].confidence),
             reverse=True,
         )
-
-        merged_matches = sorted(
+        matches = sorted(
             [char_best_match[k] for k in ranked[:top_k]],
             key=lambda m: m.confidence,
             reverse=True,
@@ -292,10 +366,17 @@ def merge_multi_dataset_results(
             segment_index=base_seg.segment_index,
             segment_bbox=base_seg.segment_bbox,
             segment_confidence=base_seg.segment_confidence,
-            matches=merged_matches,
+            matches=matches,
         ))
-
     return merged
+
+
+def _get_base(all_results: list[list[SegmentResults]]) -> Optional[list[SegmentResults]]:
+    """Return first non-empty result set (defines segment structure)."""
+    for r in all_results:
+        if r:
+            return r
+    return None
 
 
 def detect_embedder(db_path: str, default: str = Config.DEFAULT_EMBEDDER):

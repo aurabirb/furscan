@@ -65,6 +65,9 @@ class VectorIndex:
     def index_type(self) -> str:
         return "hnsw"
 
+    def reconstruct(self, idx: int) -> np.ndarray:
+        return self.index.reconstruct(int(idx))
+
     def reset(self):
         self.index = faiss.IndexHNSWFlat(self.embedding_dim, self.hnsw_m)
         self.index.hnsw.efConstruction = self.ef_construction

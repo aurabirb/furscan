@@ -77,6 +77,8 @@ class Config:
     MAX_EXAMPLES = 10
     DEFAULT_TOP_K = 5
     DEFAULT_MIN_CONFIDENCE = 0.6  # 60% minimum confidence for displaying results
+    # Merge strategy: "confidence", "rrf", or "avg_embedding"
+    MERGE_STRATEGY = "avg_embedding"
     HNSW_M = 32
     HNSW_EF_CONSTRUCTION = 200
     HNSW_EF_SEARCH = 50
