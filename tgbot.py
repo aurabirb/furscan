@@ -381,12 +381,21 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Telegram allows max 10 media per group, send in batches
-        for i in range(0, len(media), 10):
-            await context.bot.send_media_group(
+        # Telegram requires at least 2 items for media groups
+        if len(media) == 1:
+            await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
-                media=media[i:i+10],
+                photo=media[0].media,
+                caption=media[0].caption,
+                parse_mode=media[0].parse_mode,
             )
+        else:
+            # Telegram allows max 10 media per group, send in batches
+            for i in range(0, len(media), 10):
+                await context.bot.send_media_group(
+                    chat_id=update.effective_chat.id,
+                    media=media[i:i+10],
+                )
 
     except Exception as e:
         traceback.print_exc()
@@ -480,9 +489,17 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             disable_web_page_preview=True)
 
         if media:
-            for i in range(0, len(media), 10):
-                await context.bot.send_media_group(
-                    chat_id=update.effective_chat.id, media=media[i:i+10])
+            if len(media) == 1:
+                await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=media[0].media,
+                    caption=media[0].caption,
+                    parse_mode=media[0].parse_mode,
+                )
+            else:
+                for i in range(0, len(media), 10):
+                    await context.bot.send_media_group(
+                        chat_id=update.effective_chat.id, media=media[i:i+10])
     except Exception as e:
         traceback.print_exc()
         await context.bot.send_message(
