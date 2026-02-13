@@ -346,7 +346,7 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         await context.bot.send_message(**reply_kwargs, text=f"No matches above {min_confidence:.0%} confidence.")
         return
 
-    watermark_text = f"Pursuit {get_git_version()}"
+    watermark_text = f"@FurScanBot {get_git_version()}"
     annotated = await asyncio.to_thread(annotate_image, image, results, min_confidence, watermark_text)
     with NamedTemporaryFile(suffix=".jpg", delete=False) as f:
         annotated.save(f, format="JPEG", quality=90)
