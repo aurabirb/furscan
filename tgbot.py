@@ -41,6 +41,47 @@ CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
 # Global instances (lazy loaded)
 _identifiers: Optional[list[FursuitIdentifier]] = None
 _ingestor: Optional[FursuitIngestor] = None
+_barq_image_to_profile: Optional[dict[str, str]] = None
+
+
+def _get_page_url(source: Optional[str], post_id: str) -> Optional[str]:
+    """Get a page URL for a detection, preferring barq profile links."""
+    if source == "barq":
+        profile_url = _get_barq_profile_url(post_id)
+        if profile_url:
+            return profile_url
+    return get_source_url(source, post_id)
+
+
+def _get_barq_profile_url(image_uuid: str) -> Optional[str]:
+    """Look up a barq profile URL for an image UUID using barq_cache.db."""
+    global _barq_image_to_profile
+    if _barq_image_to_profile is None:
+        _barq_image_to_profile = {}
+        cache_path = Path(Config.BASE_DIR) / "barq_cache.db"
+        if cache_path.exists():
+            import json, sqlite3
+            try:
+                conn = sqlite3.connect(str(cache_path))
+                for row in conn.execute("SELECT id, data FROM profiles"):
+                    data = json.loads(row[1])
+                    username = data.get("username")
+                    if not username:
+                        continue
+                    uuids = []
+                    if data.get("primaryImage"):
+                        uuids.append(data["primaryImage"].get("uuid"))
+                    for img in data.get("images", []):
+                        if img.get("image"):
+                            uuids.append(img["image"].get("uuid"))
+                    for uid in uuids:
+                        if uid:
+                            _barq_image_to_profile[uid] = f"https://barq.app/@{username}"
+                conn.close()
+                print(f"Barq cache: indexed {len(_barq_image_to_profile)} image→profile mappings")
+            except Exception as e:
+                print(f"Warning: could not load barq_cache.db: {e}")
+    return _barq_image_to_profile.get(image_uuid)
 
 
 def get_identifiers():
@@ -193,7 +234,7 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
             continue
         lines.append(f"Segment {i}:")
         for n, m in enumerate(filtered):
-            url = get_source_url(m.source, m.post_id)
+            url = _get_page_url(m.source, m.post_id)
             name = html.escape(m.character_name or 'Unknown')
             if url:
                 lines.append(f"  {n+1}. <a href=\"{url}\">{name}</a> ({m.confidence*100:.1f}%)")
@@ -364,7 +405,7 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not url:
                 continue
             seen_posts.add(det.post_id)
-            page_url = get_source_url(det.source, det.post_id)
+            page_url = _get_page_url(det.source, det.post_id)
             safe_name = html.escape(det.character_name or "Unknown")
             safe_source = html.escape(det.source or "unknown")
             caption = f"{safe_name} ({safe_source})"
@@ -460,42 +501,38 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = [f"Search results for '<b>{html.escape(query)}</b>':"]
         for i, m in enumerate(top_matches, 1):
             name = html.escape(m.character_name or "Unknown")
-            url = get_source_url(m.source, m.post_id)
+            url = _get_page_url(m.source, m.post_id)
             if url:
                 lines.append(f"  {i}. <a href=\"{url}\">{name}</a> ({m.confidence*100:.1f}%)")
             else:
                 lines.append(f"  {i}. {name} ({m.confidence*100:.1f}%)")
 
-        # Send example images for the top match — search across all databases
-        top_name = top_matches[0].character_name
-        detections = []
-        for ident in identifiers:
-            detections.extend(ident.db.get_detections_by_character(top_name))
-        seen_posts = set()
+        # Send one example image per top match character
         media = []
-        for det in detections:
-            if det.post_id in seen_posts:
-                continue
-            img_url = get_source_image_url(det.source, det.post_id)
-            if not img_url:
-                continue
-            seen_posts.add(det.post_id)
-            page_url = get_source_url(det.source, det.post_id)
-            safe_name = html.escape(det.character_name or "Unknown")
-            safe_source = html.escape(det.source or "unknown")
-            caption = f"{safe_name} ({safe_source})"
-            if page_url:
-                caption = f"<a href=\"{page_url}\">{safe_name}</a> ({safe_source})"
-            media.append(InputMediaPhoto(media=img_url, caption=caption, parse_mode="HTML"))
+        for m in top_matches:
+            # Find one linkable image for this character
+            for ident in identifiers:
+                found = False
+                for det in ident.db.get_detections_by_character(m.character_name):
+                    img_url = get_source_image_url(det.source, det.post_id)
+                    if not img_url:
+                        continue
+                    page_url = _get_page_url(det.source, det.post_id)
+                    safe_name = html.escape(det.character_name or "Unknown")
+                    safe_source = html.escape(det.source or "unknown")
+                    caption = f"{safe_name} ({safe_source})"
+                    if page_url:
+                        caption = f"<a href=\"{page_url}\">{safe_name}</a> ({safe_source})"
+                    media.append(InputMediaPhoto(media=img_url, caption=caption, parse_mode="HTML"))
+                    found = True
+                    break
+                if found:
+                    break
 
         msg = "\n".join(lines)
         await context.bot.send_message(
             chat_id=update.effective_chat.id, text=msg, parse_mode="HTML",
             disable_web_page_preview=True)
-
-        # Pick up to 5 random photos
-        if len(media) > 5:
-            media = random.sample(media, 5)
 
         # Try media group first, fall back to individual photos
         if media:
