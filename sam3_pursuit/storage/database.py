@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -104,20 +105,23 @@ class Database:
 
     def __init__(self, db_path: str = Config.DB_PATH):
         self.db_path = db_path
-        self._conn: Optional[sqlite3.Connection] = None
+        self._local = threading.local()
         self._init_database()
         print(f"DB initialized: {db_path}")
 
     def _connect(self) -> sqlite3.Connection:
-        if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path, timeout=self._TIMEOUT)
-            self._conn.execute(f"PRAGMA busy_timeout = {self._BUSY_TIMEOUT_MS}")
-        return self._conn
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, timeout=self._TIMEOUT)
+            conn.execute(f"PRAGMA busy_timeout = {self._BUSY_TIMEOUT_MS}")
+            self._local.conn = conn
+        return conn
 
     def close(self):
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        conn = getattr(self._local, 'conn', None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None
 
     def _init_database(self):
         conn = self._connect()
