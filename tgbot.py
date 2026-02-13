@@ -42,6 +42,43 @@ CHARACTER_PATTERN = re.compile(r"character:(\S+)", re.IGNORECASE)
 _identifiers: Optional[list[FursuitIdentifier]] = None
 _ingestor: Optional[FursuitIngestor] = None
 _barq_image_to_profile: Optional[dict[str, str]] = None
+_barq_nsfw_images: Optional[set[str]] = None
+
+
+def _load_barq_cache():
+    """Load barq cache: image→profile URL mapping and NSFW image set."""
+    global _barq_image_to_profile, _barq_nsfw_images
+    _barq_image_to_profile = {}
+    _barq_nsfw_images = set()
+    cache_path = Path(Config.BASE_DIR) / "barq_cache.db"
+    if not cache_path.exists():
+        return
+    import json, sqlite3
+    try:
+        conn = sqlite3.connect(str(cache_path))
+        for row in conn.execute("SELECT id, data FROM profiles"):
+            data = json.loads(row[1])
+            username = data.get("username")
+            # Collect all images with their content ratings
+            images = []
+            if data.get("primaryImage"):
+                images.append(data["primaryImage"])
+            for img in data.get("images", []):
+                if img.get("image"):
+                    images.append(img["image"])
+            for img in images:
+                uid = img.get("uuid")
+                if not uid:
+                    continue
+                rating = img.get("contentRating", "safe")
+                if rating in ("explicit", "hard"):
+                    _barq_nsfw_images.add(uid)
+                if username:
+                    _barq_image_to_profile[uid] = f"https://barq.app/@{username}"
+        conn.close()
+        print(f"Barq cache: {len(_barq_image_to_profile)} image→profile mappings, {len(_barq_nsfw_images)} NSFW images")
+    except Exception as e:
+        print(f"Warning: could not load barq_cache.db: {e}")
 
 
 def _get_page_url(source: Optional[str], post_id: str) -> Optional[str]:
@@ -53,34 +90,17 @@ def _get_page_url(source: Optional[str], post_id: str) -> Optional[str]:
     return get_source_url(source, post_id)
 
 
+def _is_barq_nsfw(image_uuid: str) -> bool:
+    """Check if a barq image is marked as explicit/hard."""
+    if _barq_nsfw_images is None:
+        _load_barq_cache()
+    return image_uuid in _barq_nsfw_images
+
+
 def _get_barq_profile_url(image_uuid: str) -> Optional[str]:
     """Look up a barq profile URL for an image UUID using barq_cache.db."""
-    global _barq_image_to_profile
     if _barq_image_to_profile is None:
-        _barq_image_to_profile = {}
-        cache_path = Path(Config.BASE_DIR) / "barq_cache.db"
-        if cache_path.exists():
-            import json, sqlite3
-            try:
-                conn = sqlite3.connect(str(cache_path))
-                for row in conn.execute("SELECT id, data FROM profiles"):
-                    data = json.loads(row[1])
-                    username = data.get("username")
-                    if not username:
-                        continue
-                    uuids = []
-                    if data.get("primaryImage"):
-                        uuids.append(data["primaryImage"].get("uuid"))
-                    for img in data.get("images", []):
-                        if img.get("image"):
-                            uuids.append(img["image"].get("uuid"))
-                    for uid in uuids:
-                        if uid:
-                            _barq_image_to_profile[uid] = f"https://barq.app/@{username}"
-                conn.close()
-                print(f"Barq cache: indexed {len(_barq_image_to_profile)} image→profile mappings")
-            except Exception as e:
-                print(f"Warning: could not load barq_cache.db: {e}")
+        _load_barq_cache()
     return _barq_image_to_profile.get(image_uuid)
 
 
@@ -395,11 +415,13 @@ async def show(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"Matched characters: {names_list}"
             )
 
-        # Collect unique image URLs (one per post)
+        # Collect unique image URLs (one per post), skip NSFW barq images
         seen_posts = set()
         media = []
         for det in detections:
             if det.post_id in seen_posts:
+                continue
+            if det.source == "barq" and _is_barq_nsfw(det.post_id):
                 continue
             url = get_source_image_url(det.source, det.post_id)
             if not url:
@@ -514,6 +536,8 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for ident in identifiers:
                 found = False
                 for det in ident.db.get_detections_by_character(m.character_name):
+                    if det.source == "barq" and _is_barq_nsfw(det.post_id):
+                        continue
                     img_url = get_source_image_url(det.source, det.post_id)
                     if not img_url:
                         continue

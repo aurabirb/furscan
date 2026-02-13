@@ -215,6 +215,7 @@ Examples:
     _default_barq_dir = f"datasets/{Config.DEFAULT_DATASET}/barq"
     barq_parser.add_argument("--output-dir", "-o", default=_default_barq_dir, help=f"Output directory (default: {_default_barq_dir})")
     barq_parser.add_argument("--clean", action="store_true", help="Delete existing images below threshold (no download)")
+    barq_parser.add_argument("--include-nsfw", action="store_true", help="Include explicit/hard rated images (excluded by default)")
     barq_parser.add_argument("--exclude-datasets", "-e", help="Skip post_ids in these datasets (comma-separated)")
     _add_classify_args(barq_parser, default=True)
 
@@ -1176,7 +1177,7 @@ def download_command(args):
                     print(f"\n{'='*60}")
                     print(f"Searching: {name.title()} ({lat}, {lon})")
                     print(f"{'='*60}")
-                asyncio.run(download_barq.download_all_profiles(lat, lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, threshold=args.threshold))
+                asyncio.run(download_barq.download_all_profiles(lat, lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, threshold=args.threshold, include_nsfw=args.include_nsfw))
 
     else:
         print("Error: Use 'pursuit download furtrack' or 'pursuit download barq'")

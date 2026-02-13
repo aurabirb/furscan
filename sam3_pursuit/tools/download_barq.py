@@ -649,7 +649,7 @@ def score_and_filter_image(dest: Path, img_uuid: str, score_fn, threshold: float
         return True, None  # Keep on error
 
 
-async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, all_images: bool = False, max_age: float | None = None, score_fn=None, threshold: float = 0.85, full_profile: bool = True):
+async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, all_images: bool = False, max_age: float | None = None, score_fn=None, threshold: float = 0.85, full_profile: bool = True, include_nsfw: bool = False):
     """Download profile images from Barq."""
     headers = get_headers()
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
@@ -689,14 +689,17 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                     # Save profile to cache
                     save_profile(p)
 
-                    # Get image UUIDs
+                    # Get image UUIDs, skipping NSFW (explicit/hard) by default
                     if all_images:
-                        img_uuids = [((e or {}).get("image") or {}).get("uuid") for e in p.get("images") or []]
+                        imgs = [((e or {}).get("image") or {}) for e in p.get("images") or []]
                     else:
                         primary = p.get("primaryImage") or {}
-                        img_uuids = [primary.get("uuid")] if primary.get("uuid") else []
+                        imgs = [primary] if primary.get("uuid") else []
 
-                    img_uuids = [u for u in img_uuids if u]
+                    img_uuids = [
+                        img.get("uuid") for img in imgs
+                        if img.get("uuid") and (include_nsfw or img.get("contentRating", "safe") not in ("explicit", "hard"))
+                    ]
                     if not img_uuids:
                         print(f"  {get_folder_name(p)}: no images")
                         continue
@@ -779,6 +782,7 @@ def main():
     parser.add_argument("--minimal", action="store_true", help="Only download image metadata, not full profile data")
     parser.add_argument("--max-age", type=float, help="Skip profiles cached within this many days")
     parser.add_argument("--skip-non-fursuit", action="store_true", help="Filter out non-fursuit images using CLIP")
+    parser.add_argument("--include-nsfw", action="store_true", help="Include explicit/hard rated images (excluded by default)")
     args = parser.parse_args()
 
     if args.download_all:
@@ -787,7 +791,7 @@ def main():
             from sam3_pursuit.models.classifier import ImageClassifier
             classifier = ImageClassifier()
             score_fn = classifier.fursuit_score
-        asyncio.run(download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, full_profile=not args.minimal))
+        asyncio.run(download_all_profiles(args.lat, args.lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, full_profile=not args.minimal, include_nsfw=args.include_nsfw))
     else:
         parser.print_help()
 
