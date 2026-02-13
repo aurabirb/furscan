@@ -152,13 +152,13 @@ def save_average(dataset: str, out_dataset: str, apply: bool):
         embs = []
         for det in dets:
             bx, by, bh, bw = bx + det.bbox_x, by + det.bbox_y, bh + det.bbox_height, bw + det.bbox_width
-            embs.append(index.reconstruct(det.embedding_id).reshape(1, -1).astype(np.float32))
+            query = index.reconstruct(det.embedding_id).reshape(1, -1).astype(np.float32)
+            embs.append(query)
             conf += det.confidence
-        avgemb = np.stack(embs).mean(axis=0, keepdims=True).astype(np.float32)
+        avgemb = np.average(embs, axis=0).astype(np.float32)
         avgconf = conf / len(dets)
         bx, by, bh, bw = [t // len(dets) for t in [bx, by, bh, bw]]
         char_name = (char or "").lower()
-
         out_index.add(avgemb)
         avg_dets.append(Detection(None, str(i), char_name, i, bx, by, bw, bh, avgconf))
 
