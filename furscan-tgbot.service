@@ -4,12 +4,12 @@ After=network.target
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/furscan/
-ExecStart=/home/ubuntu/furscan/.venv/bin/python tgbot.py
+User=user
+WorkingDirectory=/home/user/Desktop/pursuit
+ExecStart=/home/user/Desktop/pursuit/.venv/bin/python tgbot.py
 Restart=on-failure
 RestartSec=5
-EnvironmentFile=/home/ubuntu/furscan/.env
+EnvironmentFile=/home/user/Desktop/pursuit/.env
 
 [Install]
 WantedBy=multi-user.target
