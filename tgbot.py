@@ -591,7 +591,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
              "To add: send photo with caption character:Name\n"
              "To identify in groups: reply to a photo with /whodis or /furscan\n"
              "To search by description: /search blue fox with white markings\n"
-             "To show a character: /show CharacterName"
+             "To show a character: /show CharacterName\n"
+             "Developers: @aurabirb\n"
+             "https://github.com/aurabirb/furscan"
     )
 
 
