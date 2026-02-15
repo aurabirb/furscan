@@ -586,12 +586,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text="Send me a photo to identify fursuit characters.\n\n"
-             "To add: reply to a photo with /furscan CharacterName\n"
-             "To add: send photo with caption /furscan CharacterName\n"
-             "To add: send photo with caption character:Name\n"
-             "To identify in groups: reply to a photo with /whodis or /furscan\n"
-             "To search by description: /search blue fox with white markings\n"
-             "To show a character: /show CharacterName\n"
+             "To add your pic: send photo with caption `character:Name`\n"
+             "To id in group chats: reply to a photo with `/whodis` or `/furscan`\n"
+             "To show character photos: /show CharacterName\n"
+             "To find by description (broken but funny): /search blue fox\n"
              "Developers: @aurabirb\n"
              "https://github.com/aurabirb/furscan"
     )
