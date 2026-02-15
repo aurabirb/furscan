@@ -249,6 +249,10 @@ Examples:
 
     args = parser.parse_args()
 
+    # Track whether --dataset was explicitly passed
+    args._dataset_explicit = any(
+        a in ("--dataset", "-d", "-ds") for a in sys.argv[1:]
+    )
     # Set db/index paths from --dataset
     args.db, args.index = _get_dataset_paths(args.dataset)
 
@@ -953,59 +957,168 @@ def ingest_from_barq(args):
     print(f"\nTotal: Added {added} images from Barq")
 
 
-def stats_command(args):
-    """Handle stats command."""
-    from sam3_pursuit.storage.database import Database
+def _collect_multi_dataset_stats(args):
+    """Collect stats across all discovered datasets, like tgbot does."""
+    from collections import Counter
+    from sam3_pursuit.storage.database import Database, bucketize
+    from sam3_pursuit.storage.vector_index import VectorIndex
+    from sam3_pursuit.api.identifier import (
+        FursuitIdentifier, detect_embedder, discover_datasets,
+    )
+
+    datasets = discover_datasets()
+    if not datasets:
+        print("No datasets found.")
+        sys.exit(1)
+
+    all_characters = set()
+    all_posts = set()
+    stats_list = []
+    embedders = set()
+    char_posts = Counter()
+    post_segments = Counter()
+
+    for db_path, index_path in datasets:
+        db = Database(db_path)
+        db_stats = db.get_stats()
+        # Add index size without loading the full identifier/embedder
+        try:
+            index = VectorIndex(index_path, embedding_dim=768)
+            db_stats["index_size"] = index.size
+        except Exception:
+            db_stats["index_size"] = 0
+        stats_list.append(db_stats)
+        all_characters.update(db.get_all_character_names())
+        all_posts.update(db.get_all_post_ids())
+        embedders.add(detect_embedder(db_path, default="unknown"))
+        for char, cnt in db.get_character_post_counts().items():
+            char_posts[char] += cnt
+        for post, cnt in db.get_post_segment_counts().items():
+            post_segments[post] += cnt
+
+    combined = FursuitIdentifier.get_combined_stats(stats_list)
+    combined["unique_characters"] = len(all_characters)
+    combined["unique_posts"] = len(all_posts)
+    combined["embedders"] = sorted(embedders)
+    combined["posts_per_character"] = bucketize(Counter(char_posts.values()))
+    combined["segments_per_post"] = bucketize(Counter(post_segments.values()))
+    return combined
+
+
+def _collect_single_dataset_stats(args):
+    """Collect stats for a single dataset specified by --dataset."""
+    from collections import Counter
+    from sam3_pursuit.storage.database import Database, bucketize
     from sam3_pursuit.storage.vector_index import VectorIndex
     from sam3_pursuit.api.identifier import detect_embedder
 
     db = Database(args.db)
     stats = db.get_stats()
     embedder_name = detect_embedder(args.db, default="unknown")
-    # Get index size without loading embedder (just need the dimension to read)
-    # Try common dimensions; VectorIndex only needs dim to create, not to read size
     try:
         index = VectorIndex(args.index, embedding_dim=768)
         stats["index_size"] = index.size
     except Exception:
         stats["index_size"] = "N/A"
-    stats["embedder"] = embedder_name
+    stats["embedders"] = [embedder_name]
+    stats["num_datasets"] = 1
+    # Histograms
+    char_posts = db.get_character_post_counts()
+    post_segments = db.get_post_segment_counts()
+    stats["posts_per_character"] = bucketize(Counter(char_posts.values()))
+    stats["segments_per_post"] = bucketize(Counter(post_segments.values()))
+    return stats
+
+
+def _get_tracking_stats():
+    """Load tracking stats if the tracking DB exists, else return None."""
+    try:
+        from sam3_pursuit.storage.tracking import IdentificationTracker
+        tracker = IdentificationTracker()
+        return tracker.get_stats()
+    except Exception:
+        return None
+
+
+def _format_histogram(histogram: dict[str, int], label: str, unit: str) -> str:
+    """Render a histogram as a text bar chart."""
+    if not histogram:
+        return ""
+    lines = [f"\n{label}:"]
+    max_count = max(histogram.values()) if histogram else 1
+    bar_width = 30
+    for bucket, count in histogram.items():
+        bar_len = max(1, int(count / max_count * bar_width))
+        lines.append(f"  {bucket:>7} {unit}: {'█' * bar_len} {count}")
+    return "\n".join(lines)
+
+
+def stats_command(args):
+    """Handle stats command."""
+    use_multi = not args._dataset_explicit
+
+    if use_multi:
+        stats = _collect_multi_dataset_stats(args)
+    else:
+        stats = _collect_single_dataset_stats(args)
+
+    tracking = _get_tracking_stats()
 
     if hasattr(args, "json") and args.json:
-        print(json.dumps(stats, indent=2, default=str))
+        output = {**stats}
+        if tracking:
+            output["tracking"] = tracking
+        print(json.dumps(output, indent=2, default=str))
+        return
+
+    if use_multi:
+        print(f"\nPursuit Statistics (all {stats.get('num_datasets', '?')} datasets)")
     else:
         print(f"\nPursuit Statistics ({args.dataset})")
+    print("=" * 50)
+    print(f"Embedder(s): {', '.join(stats.get('embedders', ['unknown']))}")
+    print(f"Total detections: {stats['total_detections']}")
+    print(f"Unique characters: {stats['unique_characters']}")
+    print(f"Unique posts: {stats['unique_posts']}")
+    if stats.get("index_size") is not None:
+        print(f"Index size: {stats.get('index_size', 'N/A')}")
+
+    if stats.get('source_breakdown'):
+        print("\nIngestion sources:")
+        for source, count in stats['source_breakdown'].items():
+            print(f"  {source or 'unknown'}: {count}")
+
+    print(_format_histogram(stats.get("posts_per_character", {}), "Posts per character", "posts"))
+    print(_format_histogram(stats.get("segments_per_post", {}), "Segments per post", "segs"))
+
+    top_chars = stats.get("top_characters")
+    if top_chars:
+        print("\nTop characters:")
+        for item in top_chars:
+            name, count = item if isinstance(item, (list, tuple)) else (item, top_chars[item])
+            print(f"  {name}: {count} images")
+
+    if tracking:
+        print("\n" + "=" * 50)
+        print("Tracking (identification requests)")
         print("=" * 50)
-        print(f"Embedder: {embedder_name}")
-        print(f"Total detections: {stats['total_detections']}")
-        print(f"Unique characters: {stats['unique_characters']}")
-        print(f"Unique posts: {stats['unique_posts']}")
-        print(f"Index size: {stats['index_size']}")
-
-        if stats.get('segmentor_breakdown'):
-            print("\nSegmentor breakdown:")
-            for model, count in stats['segmentor_breakdown'].items():
-                print(f"  {model}: {count}")
-
-        if stats.get('preprocessing_breakdown'):
-            print("\nPreprocessing configs:")
-            for config, count in stats['preprocessing_breakdown'].items():
-                print(f"  {config}: {count}")
-
-        if stats.get('git_version_breakdown'):
-            print("\nGit versions:")
-            for version, count in stats['git_version_breakdown'].items():
-                print(f"  {version or 'unknown'}: {count}")
-
-        if stats.get('source_breakdown'):
-            print("\nIngestion sources:")
-            for source, count in stats['source_breakdown'].items():
-                print(f"  {source or 'unknown'}: {count}")
-
-        if stats['top_characters']:
-            print("\nTop characters:")
-            for name, count in stats['top_characters']:
-                print(f"  {name}: {count} images")
+        print(f"Total requests: {tracking['total_requests']}")
+        print(f"Unique users: {tracking['unique_users']}")
+        print(f"Segments found: {tracking['total_segments_found']}")
+        avg_ms = tracking.get('avg_processing_time_ms')
+        if avg_ms is not None:
+            print(f"Avg processing time: {avg_ms}ms")
+        print(f"Overall hit rate: {tracking['hit_rate']} ({tracking['requests_with_matches']}/{tracking['total_requests']})")
+        if tracking.get("per_dataset"):
+            print("\nPer-dataset breakdown:")
+            for ds_name, ds_stats in tracking["per_dataset"].items():
+                print(f"  {ds_name}:")
+                print(f"    matches served: {ds_stats['total_matches']}")
+                print(f"    requests with hits: {ds_stats['requests_with_hits']}")
+                print(f"    hit rate: {ds_stats['hit_rate']}")
+                print(f"    top-1 hits: {ds_stats['top1_hits']} ({ds_stats['top1_rate']})")
+        if tracking.get("total_feedback"):
+            print(f"\nFeedback: {tracking['correct_feedback']}/{tracking['total_feedback']} marked correct")
 
 
 def segment_command(args):

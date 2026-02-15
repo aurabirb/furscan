@@ -1,8 +1,10 @@
+import math
 import os
 import sqlite3
 import subprocess
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache, wraps
@@ -18,6 +20,39 @@ SOURCE_TGBOT = "tgbot"
 SOURCE_BARQ = "barq"
 
 SOURCES_AVAILABLE = [SOURCE_FURTRACK, SOURCE_NFC25, SOURCE_MANUAL, SOURCE_TGBOT, SOURCE_BARQ]
+
+
+def bucketize(values: dict | Counter, max_buckets: int = 8) -> dict[str, int]:
+    """Group a {value: count} mapping into dynamic histogram buckets.
+
+    If there are few distinct values, keeps them exact.
+    Otherwise creates ~max_buckets log-scaled ranges.
+    """
+    if not values:
+        return {}
+    sorted_vals = sorted(values.items())
+    if len(sorted_vals) <= max_buckets:
+        return {str(v): c for v, c in sorted_vals}
+    min_val, max_val = sorted_vals[0][0], sorted_vals[-1][0]
+    log_min = math.log1p(min_val)
+    log_max = math.log1p(max_val)
+    step = (log_max - log_min) / max_buckets
+    boundaries = []
+    for i in range(1, max_buckets):
+        b = int(math.expm1(log_min + step * i))
+        if not boundaries or b > boundaries[-1]:
+            boundaries.append(b)
+    buckets = {}
+    bi = 0
+    for val, count in sorted_vals:
+        while bi < len(boundaries) and val > boundaries[bi]:
+            bi += 1
+        lo = min_val if bi == 0 else boundaries[bi - 1] + 1
+        hi = boundaries[bi] if bi < len(boundaries) else max_val
+        key = str(lo) if lo == hi else f"{lo}-{hi}"
+        buckets[key] = buckets.get(key, 0) + count
+    return buckets
+
 
 def retry_on_locked(max_retries: int = 8, base_delay: float = 0.2):
     """Retry on 'database is locked' with exponential backoff."""
@@ -369,6 +404,27 @@ class Database:
             "git_version_breakdown": git_version_breakdown,
             "source_breakdown": source_breakdown,
         }
+
+    def get_character_post_counts(self) -> dict[str, int]:
+        """Return {character_name: num_distinct_posts} for all characters."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("""
+            SELECT character_name, COUNT(DISTINCT post_id) as cnt
+            FROM detections WHERE character_name IS NOT NULL
+            GROUP BY character_name
+        """)
+        return dict(c.fetchall())
+
+    def get_post_segment_counts(self) -> dict[str, int]:
+        """Return {post_id: num_segments} for all posts."""
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute("""
+            SELECT post_id, COUNT(*) as cnt
+            FROM detections GROUP BY post_id
+        """)
+        return dict(c.fetchall())
 
     @retry_on_locked()
     def has_post(self, post_id: str) -> bool:

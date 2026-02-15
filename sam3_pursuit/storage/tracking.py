@@ -202,3 +202,67 @@ class IdentificationTracker:
         )
         conn.commit()
         return c.lastrowid
+
+    def get_stats(self) -> dict:
+        """Get tracking statistics: request counts, unique users, hit rates, avg time."""
+        conn = self._connect()
+        c = conn.cursor()
+
+        c.execute("SELECT COUNT(*) FROM identification_requests")
+        total_requests = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(DISTINCT telegram_user_id) FROM identification_requests WHERE telegram_user_id IS NOT NULL")
+        unique_users = c.fetchone()[0]
+
+        c.execute("SELECT AVG(processing_time_ms) FROM identification_requests WHERE processing_time_ms IS NOT NULL")
+        avg_time = c.fetchone()[0]
+
+        c.execute("SELECT SUM(num_segments) FROM identification_requests")
+        total_segments = c.fetchone()[0] or 0
+
+        # Hit rate: requests that found at least one match
+        c.execute("""
+            SELECT COUNT(DISTINCT r.id) FROM identification_requests r
+            JOIN identification_matches m ON m.request_id = r.id
+            WHERE m.match_confidence > 0
+        """)
+        requests_with_matches = c.fetchone()[0]
+
+        # Per-dataset breakdown: matches served, unique requests hit, top-1 hit rate
+        # top-1 means the match was rank_after_merge == 1 (the result the user actually sees)
+        c.execute("""
+            SELECT m.dataset_name,
+                   COUNT(*) as total_matches,
+                   COUNT(DISTINCT m.request_id) as requests_with_hits,
+                   SUM(CASE WHEN m.rank_after_merge = 1 THEN 1 ELSE 0 END) as top1_hits
+            FROM identification_matches m
+            WHERE m.dataset_name IS NOT NULL
+            GROUP BY m.dataset_name
+        """)
+        per_dataset = {}
+        for name, total_matches, requests_hit, top1_hits in c.fetchall():
+            per_dataset[name] = {
+                "total_matches": total_matches,
+                "requests_with_hits": requests_hit,
+                "hit_rate": f"{requests_hit / total_requests:.1%}" if total_requests > 0 else "N/A",
+                "top1_hits": top1_hits,
+                "top1_rate": f"{top1_hits / total_requests:.1%}" if total_requests > 0 else "N/A",
+            }
+
+        # Feedback stats
+        c.execute("SELECT COUNT(*) FROM identification_feedback")
+        total_feedback = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM identification_feedback WHERE is_correct = 1")
+        correct_feedback = c.fetchone()[0]
+
+        return {
+            "total_requests": total_requests,
+            "unique_users": unique_users,
+            "total_segments_found": total_segments,
+            "avg_processing_time_ms": round(avg_time) if avg_time else None,
+            "requests_with_matches": requests_with_matches,
+            "hit_rate": f"{requests_with_matches / total_requests:.1%}" if total_requests > 0 else "N/A",
+            "per_dataset": per_dataset,
+            "total_feedback": total_feedback,
+            "correct_feedback": correct_feedback,
+        }

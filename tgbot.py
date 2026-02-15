@@ -814,21 +814,38 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command."""
     try:
+        from collections import Counter
+        from sam3_pursuit.storage.database import bucketize
+
         identifiers = get_identifiers()
         all_characters = set()
         all_posts = set()
         stats_list = [ident.get_stats() for ident in identifiers]
         combined_stats = FursuitIdentifier.get_combined_stats(stats_list)
+
+        char_posts = Counter()
+        post_segments = Counter()
         for ident in identifiers:
-            # Collect character names and post IDs from each db
             all_characters.update(ident.db.get_all_character_names())
             all_posts.update(ident.db.get_all_post_ids())
-        combined_stats = {
-            **combined_stats,
-            "unique_characters": len(all_characters),
-            "unique_posts": len(all_posts),
-        }
-        del combined_stats["top_characters"] # too much noise
+            for char, cnt in ident.db.get_character_post_counts().items():
+                char_posts[char] += cnt
+            for post, cnt in ident.db.get_post_segment_counts().items():
+                post_segments[post] += cnt
+
+        combined_stats["unique_characters"] = len(all_characters)
+        combined_stats["unique_posts"] = len(all_posts)
+        combined_stats["posts_per_character"] = bucketize(Counter(char_posts.values()))
+        combined_stats["segments_per_post"] = bucketize(Counter(post_segments.values()))
+        del combined_stats["top_characters"]
+
+        # Tracking info
+        try:
+            tracker = get_tracker()
+            combined_stats["tracking"] = tracker.get_stats()
+        except Exception:
+            pass
+
         import json
         msg = json.dumps(combined_stats, indent=2, ensure_ascii=False, default=str)
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
