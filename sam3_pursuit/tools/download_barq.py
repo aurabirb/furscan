@@ -722,15 +722,15 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                                     filtered += 1
 
                     new_uuids = [u for u in img_uuids if u not in existing and u not in filtered_uuids and u not in failed_uuids and u not in EXCLUDED_POST_IDS]
-                    if max_images and len(existing) + len(new_uuids) > max_images:
-                        print(f'   {folder_name}: max images ({max_images}) reached')
-                        new_uuids = new_uuids[:max_images - len(existing)]
 
                     if not new_uuids:
                         print(f"  {folder_name}: up to date ({len(existing)} images)")
                         continue
 
                     for img_uuid in new_uuids:
+                        if max_images and len(existing) >= max_images:
+                            print(f'   {folder_name}: max images ({max_images}) reached')
+                            break
                         dest = char_folder / f"{img_uuid}.jpg"
 
                         # Create directory only when we're about to save a file
@@ -761,6 +761,7 @@ async def download_all_profiles(lat: float, lon: float, max_pages: int = 100, al
                             print(f"  {folder_name}: {img_uuid}.jpg")
                         total += 1
                         existing.add(img_uuid)
+
                 except Exception as e:
                     print(f"  Error processing profile {p.get('id', '?')}: {e}")
 
@@ -780,8 +781,8 @@ def main():
     parser.add_argument("--download-all", action="store_true", help="Download all profiles")
     parser.add_argument("--lat", type=float, default=52.378, help="Latitude for search center")
     parser.add_argument("--lon", type=float, default=4.9, help="Longitude for search center")
-    parser.add_argument("--max-pages", type=int, default=100, help="Max pages to fetch")
-    parser.add_argument("--max-images", type=int, default=10, help="Max pages per character")
+    parser.add_argument("--max-pages", type=int, default=10, help="Max pages to fetch")
+    parser.add_argument("--max-images", type=int, default=10, help="Max images per character")
     parser.add_argument("--all-images", action="store_true", help="Download all images per profile (not just primary)")
     parser.add_argument("--minimal", action="store_true", help="Only download image metadata, not full profile data")
     parser.add_argument("--max-age", type=float, help="Skip profiles cached within this many days")
