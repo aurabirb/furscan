@@ -439,16 +439,16 @@ def format_summary(
                 pct = agree / total * 100 if total else 0
                 lines.append(f"  {a} vs {b}: {agree}/{total} agree ({pct:.1f}%), {disagree} disagree")
 
-                if disagree > 0:
-                    lines.append(f"    Disagreements:")
-                    for k, tc in enumerate(top1_chars):
-                        if tc.get(a) and tc.get(b) and tc[a].lower() != tc[b].lower():
-                            img_name = Path(test_images[k][0]).name
-                            gt_chars = test_images[k][1]
-                            gt = gt_chars[0] if gt_chars else "?"
-                            lines.append(
-                                f"      {img_name} (gt={gt}): {a}={tc[a]}, {b}={tc[b]}"
-                            )
+                # if disagree > 0:
+                #     lines.append(f"    Disagreements:")
+                #     for k, tc in enumerate(top1_chars):
+                #         if tc.get(a) and tc.get(b) and tc[a].lower() != tc[b].lower():
+                #             img_name = Path(test_images[k][0]).name
+                #             gt_chars = test_images[k][1]
+                #             gt = gt_chars[0] if gt_chars else "?"
+                #             lines.append(
+                #                 f"      {img_name} (gt={gt}): {a}={tc[a]}, {b}={tc[b]}"
+                #             )
 
     lines.append("")
     return "\n".join(lines)
