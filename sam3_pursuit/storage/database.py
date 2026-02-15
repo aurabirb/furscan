@@ -1,5 +1,6 @@
 import math
 import os
+import sys
 import sqlite3
 import subprocess
 import threading
@@ -142,7 +143,7 @@ class Database:
         self.db_path = db_path
         self._local = threading.local()
         self._init_database()
-        print(f"DB initialized: {db_path}")
+        print(f"DB initialized: {db_path}", file=sys.stderr)
 
     def _connect(self) -> sqlite3.Connection:
         conn = getattr(self._local, 'conn', None)

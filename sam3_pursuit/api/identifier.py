@@ -1,4 +1,5 @@
 import hashlib
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -391,9 +392,9 @@ def detect_embedder(db_path: str, default: str = Config.DEFAULT_EMBEDDER):
     """Detects the short name of the embedder from the dataset"""
     emb = Database.read_metadata_lightweight(db_path, Config.METADATA_KEY_EMBEDDER)
     if emb:
-        print(f"Auto-detected embedder for {db_path}: {emb} ({SHORT_NAME_TO_CLI.get(emb, emb)})")
+        print(f"Auto-detected embedder for {db_path}: {emb} ({SHORT_NAME_TO_CLI.get(emb, emb)})", file=sys.stderr)
         return emb
-    print(f"WARN: Could not find embedder for {db_path}, using default: {default}")
+    print(f"WARN: Could not find embedder for {db_path}, using default: {default}", file=sys.stderr)
     return default
 
 
