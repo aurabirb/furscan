@@ -5,6 +5,7 @@ Available on Telegram as [@furscanbot](https://t.me/furscanbot) and other names.
 
 ## TODO:
 - [ ] Create a periodic schedule job to download and ingest new images from public sources
+- [ ] Download nfc26 dataset
 - [ ] Fix the nsfw filter
 - [ ] Number the segments on the drawn label
 - [ ] Rename the confusing "segment" naming when replying to the user, instead use "fursuit"
