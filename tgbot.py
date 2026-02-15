@@ -367,6 +367,15 @@ async def identify_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
         await context.bot.send_message(**reply_kwargs, text=f"No matches above {min_confidence:.0%} confidence.")
         return
 
+    # Resize image to match pipeline input size so bounding boxes align
+    if max(*image.size) > Config.MAX_INPUT_IMAGE_SIZE:
+        w, h = image.size
+        if w >= h:
+            new_w, new_h = Config.MAX_INPUT_IMAGE_SIZE, int(h * Config.MAX_INPUT_IMAGE_SIZE / w)
+        else:
+            new_h, new_w = Config.MAX_INPUT_IMAGE_SIZE, int(w * Config.MAX_INPUT_IMAGE_SIZE / h)
+        image = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
     watermark_text = f"@FurScanBot {get_git_version()}"
     annotated = await asyncio.to_thread(annotate_image, image, results, min_confidence, watermark_text)
     with NamedTemporaryFile(suffix=".jpg", delete=False) as f:

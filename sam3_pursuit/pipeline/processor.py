@@ -182,6 +182,10 @@ class CachedProcessingPipeline:
         if self.mask_storage.has_no_segments_marker(post_id, source, model, concept):
             return FullImageSegmentor().segment(image)
         segs = self.mask_storage.load_segs_for_post(post_id, source, model, concept, force_conf=True)
+        for seg in segs:
+            if (seg.mask.shape[1], seg.mask.shape[0]) != image.size:
+                print(f"WARN: resizing cached mask {seg.mask.shape[:2][::-1]} -> {image.size} for {post_id}")
+                seg.mask = np.array(Image.fromarray(seg.mask).resize(image.size, Image.Resampling.NEAREST))
         segmentations = [
             SegmentationResult.from_mask(image, seg.mask, segmentor=self.segmentor.model_name, confidence=seg.confidence) for seg in segs
         ]
