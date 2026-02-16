@@ -869,7 +869,7 @@ def ingest_from_nfc(args):
     added = ingestor.add_images(
         character_names=char_names,
         image_paths=img_paths,
-        source=SOURCE_NFC25,
+        source=args.source,
         save_crops=args.save_crops,
         add_full_image=add_full_image,
         skip_non_fursuit=args.skip_non_fursuit,
