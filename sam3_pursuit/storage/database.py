@@ -16,6 +16,7 @@ from sam3_pursuit.config import Config
 
 SOURCE_FURTRACK = "furtrack"
 SOURCE_NFC25 = "nfc25"
+SOURCE_NFC26 = "nfc26"
 SOURCE_MANUAL = "manual"
 SOURCE_TGBOT = "tgbot"
 SOURCE_BARQ = "barq"

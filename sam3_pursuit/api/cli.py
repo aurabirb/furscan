@@ -159,7 +159,7 @@ Examples:
     show_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     ingest_parser = subparsers.add_parser("ingest", help="Bulk ingest images")
-    ingest_parser.add_argument("method", choices=["directory", "nfc25", "barq"],
+    ingest_parser.add_argument("method", choices=["directory", "nfc", "barq"],
                                help="Ingestion method")
     ingest_parser.add_argument("--data-dir", "-dd", help="Data directory (default: datasets/<dataset>/<source>)")
     ingest_parser.add_argument("--source", "-s", required=False, choices=SOURCES_AVAILABLE,
@@ -194,6 +194,8 @@ Examples:
     download_parser = subparsers.add_parser("download", help="Download images from external sources")
     download_parser.add_argument("--output-dir", "-o", default="", help=f"Output directory")
     download_subparsers = download_parser.add_subparsers(dest="source", help="Download source")
+
+    nfc26_parser = download_subparsers.add_parser("nfc26", help="Download from nfc26")
 
     furtrack_parser = download_subparsers.add_parser("furtrack", help="Download from FurTrack")
     furtrack_parser.add_argument("--character", "-c", help="Download specific character")
@@ -779,8 +781,8 @@ def ingest_command(args):
             print("Error: --source is required for directory ingestion.")
             sys.exit(1)
         ingest_from_directory(args)
-    elif args.method == "nfc25":
-        ingest_from_nfc25(args)
+    elif args.method == "nfc":
+        ingest_from_nfc(args)
     elif args.method == "barq":
         ingest_from_barq(args)
 
@@ -831,16 +833,16 @@ def ingest_from_directory(args):
     print(f"\nTotal: Added {added} images")
 
 
-def ingest_from_nfc25(args):
-    """Ingest images from NFC25 dataset."""
+def ingest_from_nfc(args):
+    """Ingest images from NFC fursuit list."""
     ingestor = _get_ingestor(args)
 
     data_dir = Path(args.data_dir)
-    json_path = data_dir / "nfc25-fursuit-list.json"
+    json_path = data_dir / "fursuit-list.json"
     images_dir = data_dir / "fursuit_images"
 
     if not json_path.exists():
-        print(f"Error: NFC25 JSON not found: {json_path}")
+        print(f"Error: NFC JSON not found: {json_path}")
         sys.exit(1)
 
     if not images_dir.exists():
@@ -850,7 +852,7 @@ def ingest_from_nfc25(args):
     with open(json_path) as f:
         fursuit_list = json.load(f)['FursuitList']
 
-    print(f"Found {len(fursuit_list)} fursuits in NFC25 dataset")
+    print(f"Found {len(fursuit_list)} fursuits in NFC dataset {args.dataset}")
 
     total_added = 0
 
@@ -1228,12 +1230,16 @@ def download_command(args):
     # When downloading to a non-default dataset, auto-configure paths
     if args.dataset != Config.DEFAULT_DATASET:
         _dd = Config.DEFAULT_DATASET
-        if not args.output_dir or (args.output_dir in (f"datasets/{_dd}/furtrack", f"datasets/{_dd}/barq",)):
+        if not args.output_dir or (args.output_dir in (f"datasets/{_dd}/furtrack", f"datasets/{_dd}/barq")):
             args.output_dir = f"datasets/{args.dataset}/{args.source}"
 
     excluded_post_ids = _get_excluded_post_ids(getattr(args, "exclude_datasets", ""))
 
-    if args.source == "furtrack":
+    if args.source == "nfc26":
+        from sam3_pursuit.tools import download_nfc26
+        download_nfc26.download_nfc(subfolder=f"datasets/{args.dataset}/nfc26")
+
+    elif args.source == "furtrack":
         from sam3_pursuit.tools import download_furtrack
         if args.output_dir:
             download_furtrack.IMAGES_DIR = args.output_dir
@@ -1294,7 +1300,7 @@ def download_command(args):
                 asyncio.run(download_barq.download_all_profiles(lat, lon, args.max_pages, args.all_images, args.max_age, score_fn=score_fn, threshold=args.threshold, include_nsfw=args.include_nsfw))
 
     else:
-        print("Error: Use 'pursuit download furtrack' or 'pursuit download barq'")
+        print("Error: Use 'pursuit download {furtrack,nfc26,barq}")
         sys.exit(1)
 
 
